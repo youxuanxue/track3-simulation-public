@@ -1,0 +1,35 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-EXAMPLE-vectorized-matching",
+  "generated_by": "qfbench2 track3 organising committee",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "4e6f5d9571f54dee590c7f5d1963eb2970175f8cc46d3d4c8030ed97b456830f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2856
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "03d279ba21ef567bb58f42af481f49727b47e25d4a71d7fc7ca21a8a1f96c94d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2249
+    },
+    {
+      "path": "README.md",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "6b004a6adbd69f177fbd74d60379cab884736a6ed560d678e17f5a7ffa9bced8",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 11013
+    }
+  ],
+  "notes": "ABIDES baseline fork pinned at https://github.com/jpmorganchase/abides-jpmc-public commit f9cbe51342b7dedd9587e4e069040d68a5c6477f (BSD-3-Clause). Submission interface: `simulate --config /input/scenario.json --out /output/trace.parquet`, network disabled, required outputs trace.parquet + events.json."
+}

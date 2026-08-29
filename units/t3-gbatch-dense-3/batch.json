@@ -1,0 +1,26 @@
+{
+  "n": 3,
+  "subs": [
+    {
+      "sub": "sub_00",
+      "scenario_file": "scenarios/sub_00.json",
+      "n_events": 8262,
+      "reference_trace_sha256": "12c8ad464d61ae53671b05585f1d6ac912d249f5e00ea078c58e6f888e2a499a",
+      "reference_message_sha256": "ca96c9876c339f096ba3806fdcd55e617869fbd6de9943f7a54356f5a2ef0f35"
+    },
+    {
+      "sub": "sub_01",
+      "scenario_file": "scenarios/sub_01.json",
+      "n_events": 8256,
+      "reference_trace_sha256": "c28aa4ea7b03905a5807a50db7946e7441779d1cf33177bc40a522892cd9add4",
+      "reference_message_sha256": "4377673571acdafb8c094ab7bc6b24cd5628a2ae2ef2596a829ef8f4b4562bea"
+    },
+    {
+      "sub": "sub_02",
+      "scenario_file": "scenarios/sub_02.json",
+      "n_events": 8233,
+      "reference_trace_sha256": "0ecfb5b5173584e135c701bf0505c2b85bb38ec85a4ee7cc9732fb0d5167c060",
+      "reference_message_sha256": "c1dca14fa5dc5759db198ff7dc46870242b73dc5b2152a219ca067cb3e6298fb"
+    }
+  ]
+}

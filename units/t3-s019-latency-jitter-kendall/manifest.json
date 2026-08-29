@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-s019-latency-jitter-kendall",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "38d1ff4611a20731221d917045109a114735df503f085fa7e354052176f014e6",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2303
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "6c360c8206967e3956da5ee399477b0383352dace9bfe754669855caedd29be2",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 379
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "4fa88d6c796300529d6b05a4d4827bbd0bc3d7007a0115b5ae49abbe3333dd92",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 517370
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "60d1f00d8e21d5d00328395667b69d8a6d57da4122239692431562ba357ac9c0",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2047
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "0889c36492167a2c7e65cc65defea256ff28b31b7abd82813b1f32b7e1b569b9",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 144345
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-s019-latency-jitter-kendall; real sha256/bytes for every file."
+}

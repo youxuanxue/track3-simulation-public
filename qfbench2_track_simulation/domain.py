@@ -1,0 +1,215 @@
+"""The Track 3 metric domain: what the C1 clip ceiling must be, and why.
+
+## Executive summary (read this first)
+
+Track 3 ranks on events/sec, which has no natural upper bound, but frozen ruling R-2 requires a
+finite ``metric.domain.max`` so that real scores can be clipped into the same domain the
+participant-failure value ``W = 0.0`` lives in. Somebody therefore has to choose a number. The
+shipped C1 simulation fixture chose **2,000,000 events/sec**, and the agent that wrote it recorded
+that it had invented the figure because the freeze demanded a finite maximum and supplied none.
+
+**That number is refused here, and it is refused on measurement rather than on taste.** A batch
+unit ranks on the *aggregate* rate across its markets, so the attainable ceiling scales with batch
+width; 2e6 sits *below* the competitive band this package has long cited for a batch only eight
+markets wide (a band since withdrawn as never measured — see the table below, which is why the
+ceiling is derived from the physical bound rather than from that band), and two orders of
+magnitude below the widest batch the track ships. A ceiling below an attainable honest
+score does not bound an exploit — it silently deletes the top of the leaderboard and ties every
+strong submission at the same clipped value.
+
+The replacement is not another constant. It is a **rule evaluated against the roster being
+scored**, :func:`required_domain_max`, plus :func:`assert_domain_max_covers_roster`, which the
+production scorer calls before it ranks anything. An invented ceiling cannot silently govern the
+top again, because a plan whose ceiling would clip an honest submission is refused as an organizer
+fault instead of quietly compressing the board.
+
+## The derivation, from published figures only
+
+**None of the events/sec figures below was measured on the evaluation fleet.** They were written
+2026-06-23 against the hardware this repository described at the time — not the B200 hosts, and not
+the gVisor sandbox every ranked run executes under. They are used here only to derive a ceiling
+that must sit ABOVE every attainable honest score, which is the one direction in which being wrong
+is free (see the asymmetry below). Do not read any of them as a target.
+
+| Quantity | Value | Provenance |
+|---|---|---|
+| Unmodified ABIDES baseline | ~65,000 events/sec | NOT measured on the evaluation fleet; `baselines/README.md` §3 |
+| Internal vectorized reference | ~400,000 events/sec | NOT measured on the evaluation fleet; same section |
+| Competitive band, per market | 150,000-600,000 events/sec | Never measured, and WITHDRAWN from `baselines/README.md` §3 as fabricated. Retained here only as the historical input the ceiling was derived from |
+| Physical per-market ceiling | 1e7 events/sec | :data:`MAX_PER_MARKET_EVENTS_PER_SEC`, below — a chosen bound, not a measurement |
+| Widest batch unit | roster-dependent | ``<unit>/batch.json`` on the organizer side |
+
+**The repository's own shipped data contradicts the 65,000 figure.** The 65 public
+``units/*/events.json``, all written by the same pinned baseline, record a geometric mean of
+**13,793 events/sec** (range 3,471-18,046) — about **4.7x below** 65,000. The hardware behind those
+runs is not recorded either, and their ``wall_clock_sec`` covers the simulation loop rather than the
+whole container, so they do not replace a fleet measurement; they do show that 65,000 is the figure
+least likely to be right. The ranking floor is UNCHANGED by this note, and neither number is read
+by the code here: see :data:`ABIDES_BASELINE_EVENTS_PER_SEC` and `baselines/README.md` §3 for what
+the floor is actually compared against.
+
+:data:`MAX_PER_MARKET_EVENTS_PER_SEC` is **not new**. It is the plausibility ceiling this package
+has published since the harness-measurement handoff was written, chosen then as "more than an order
+of magnitude above the top of the competitive band, so no honest submission can reach it". What
+changed is its job. It used to be the last line of defence against a fabricated wall clock, and its
+own docstring conceded it was "a plausibility bound, NOT an anti-cheat". The wall clock is now
+host-measured in C2 and the event count is the Runner's parquet-footer count checked against the
+reference, so neither half of the fraction is the participant's any more. The constant is therefore
+free to do the one job a clip ceiling actually has under R-2: sit **above every attainable honest
+score**, so clipping is inert for real submissions and only ever binds a value that could not have
+been produced.
+
+That is the asymmetry that decides the number. `W = 0.0` is the domain *minimum*, so the exploit
+R-2 exists to close — a failure scoring better than a real result — is closed by the floor and is
+untouched by the ceiling. A ceiling that is too high costs nothing; a ceiling that is too low
+deletes real ranking information. So the ceiling is chosen generously and by derivation, never
+tightly and by guess.
+
+## What this means for the shipped fixture
+
+`qfbench2_common/contracts/fixtures/c1/simulation_final.expanded.json` currently carries
+``domain.max = 2000000.0``. For a roster of single-market units the required value is
+:data:`MAX_PER_MARKET_EVENTS_PER_SEC` (1e7); for a roster containing batch units it is that figure
+times the widest batch in the roster. The Hub owns the fixture, so this module supplies the rule
+and the scorer enforces it.
+"""
+
+from __future__ import annotations
+
+import json
+import tomllib
+from collections.abc import Iterable
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+__all__ = [
+    "ABIDES_BASELINE_EVENTS_PER_SEC",
+    "COMPETITIVE_BAND_EVENTS_PER_SEC",
+    "MAX_PER_MARKET_EVENTS_PER_SEC",
+    "PARTICIPANT_FAILURE_SCORE",
+    "VECTORIZED_REFERENCE_EVENTS_PER_SEC",
+    "assert_domain_max_covers_roster",
+    "batch_width",
+    "required_domain_max",
+]
+
+#: The pre-committed worst value `W` for Track 3 (frozen: 0.0 events/sec, the domain minimum).
+PARTICIPANT_FAILURE_SCORE = 0.0
+
+#: Historical performance reference points, recorded so the ceiling derivation above cites stated
+#: figures rather than numbers chosen to make it come out somewhere.
+#:
+#: **NOT MEASURED ON THE EVALUATION FLEET.** All three date to 2026-06-23 and describe the hardware
+#: this repository described then — not the B200 hosts and not the gVisor sandbox. They are
+#: DOCUMENTATION ONLY: nothing in this package or in the scorer reads them, so their values do not
+#: move any score. Only :data:`MAX_PER_MARKET_EVENTS_PER_SEC` below feeds the clip ceiling.
+
+#: The ranking floor's nominal figure. The repository's own 65 shipped ``units/*/events.json``,
+#: written by this same pinned baseline, give a geometric mean of 13,793 events/sec (range
+#: 3,471-18,046) — about 4.7x lower. The floor itself is UNCHANGED and is not this constant:
+#: per ``baselines/README.md`` §3 it compares the median of your throughput units against the
+#: median recorded in those same units' reference ``events.json``.
+ABIDES_BASELINE_EVENTS_PER_SEC = 65_000.0
+
+#: Internal reference point; gates nothing. Not measured on the evaluation fleet.
+VECTORIZED_REFERENCE_EVENTS_PER_SEC = 400_000.0
+
+#: NEVER MEASURED, and WITHDRAWN from ``baselines/README.md`` §3, which now records that no such
+#: range was ever observed and that there were no submissions to observe it from. Kept at its
+#: original value because the ceiling derivation above and ``tests/test_domain_ceiling.py`` are
+#: pinned to it as a historical input; it is not a target and must not be published as one.
+COMPETITIVE_BAND_EVENTS_PER_SEC = (150_000.0, 600_000.0)
+
+#: Physical ceiling on a SINGLE market's events/sec, more than an order of magnitude above the top
+#: of the (withdrawn) competitive band. A CHOSEN bound, not a measurement. Unchanged in value from
+#: the plausibility bound this package has always published; see the module docstring for why its
+#: role changed. This is the one constant here that feeds a scored quantity.
+MAX_PER_MARKET_EVENTS_PER_SEC = 1e7
+
+
+def batch_width(unit_dir: str | Path) -> int:
+    """How many markets this unit ranks over: its batch width, or 1 for a single-market unit.
+
+    Read from the ORGANIZER-side ``batch.json`` (``input/ref/<handle>/``), never from anything the
+    submission wrote. A batch unit ranks on the aggregate rate across its markets, so this is the
+    factor by which its attainable ceiling exceeds a single market's.
+
+    A malformed or unreadable ``batch.json`` raises: the width is an input to the clip ceiling, and
+    silently treating an unreadable batch unit as one market would reinstate exactly the too-low
+    ceiling this module exists to refuse.
+    """
+    path = Path(unit_dir) / "batch.json"
+    if not path.exists():
+        return 1
+    document: Any = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"{path} must be a JSON object")
+    subs = document.get("subs")
+    if not isinstance(subs, list) or not subs:
+        raise ValueError(
+            f"{path} declares no sub-scenarios; a batch unit must list at least one"
+        )
+    return len(subs)
+
+
+@lru_cache(maxsize=32)
+def _widest_batch(root: str, handles: tuple[str, ...]) -> int:
+    widest = 1
+    for handle in handles:
+        widest = max(widest, batch_width(Path(root) / handle))
+    return widest
+
+
+def required_domain_max(
+    reference_root: str | Path, unit_handles: Iterable[str]
+) -> float:
+    """The smallest ``metric.domain.max`` that cannot clip an honest submission on this roster.
+
+    ``reference_root`` is the organizer's ``input/ref``; ``unit_handles`` is the C1 roster order.
+    Returns :data:`MAX_PER_MARKET_EVENTS_PER_SEC` times the widest batch in the roster.
+
+    Memoized on ``(root, handles)``: the production gate checks the ceiling once per unit, and
+    without a cache a 38-unit roster would re-read every ``batch.json`` 38 times. The cache is keyed
+    on the arguments and holds only integers, so it cannot carry state between evaluations.
+    """
+    return MAX_PER_MARKET_EVENTS_PER_SEC * _widest_batch(
+        str(reference_root), tuple(str(h) for h in unit_handles)
+    )
+
+
+def assert_domain_max_covers_roster(
+    domain_max: float, reference_root: str | Path, unit_handles: Iterable[str]
+) -> None:
+    """Refuse a plan whose clip ceiling sits below an attainable honest score.
+
+    Raises :class:`ValueError` with the derivation in the message. The production gate turns that
+    into an organizer fault, which aborts the evaluation rather than publishing a board whose top
+    has been silently flattened.
+    """
+    required = required_domain_max(reference_root, unit_handles)
+    if domain_max < required:
+        raise ValueError(
+            f"the C1 metric.domain.max is {domain_max:.6g} events/sec but this roster can "
+            f"legitimately reach {required:.6g} "
+            f"({MAX_PER_MARKET_EVENTS_PER_SEC:.6g} events/sec per market x "
+            f"{int(required / MAX_PER_MARKET_EVENTS_PER_SEC)} market(s) in the widest batch unit). "
+            "Clipping a real score into a domain that stops below it does not bound an exploit — "
+            "W is the domain MINIMUM, so the R-2 property is carried entirely by the floor — it "
+            "deletes ranking information at the top of the board and ties every strong submission "
+            "at the ceiling. Raise metric.domain.max; see qfbench2_track_simulation.domain."
+        )
+
+
+def declared_scoring_params(unit_dir: str | Path) -> dict[str, Any]:
+    """The ``[scoring.params]`` table from a unit's organizer-side card, or ``{}``.
+
+    Lives here rather than in the gate so the batch path, the single-unit path and the private
+    oracle all read a card the same way.
+    """
+    path = Path(unit_dir) / "card.toml"
+    if not path.exists():
+        return {}
+    card = tomllib.loads(path.read_text(encoding="utf-8"))
+    params = card.get("scoring", {}).get("params", {})
+    return dict(params) if isinstance(params, dict) else {}

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-fastlob-tight-book",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "8704208810a179c268515603bab85cda56ec4f9739fd74f959709ac54b148885",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2325
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "ee4028df622a891deecc7c41331243984e2141695d2c72c31e461ae3684c883c",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 379
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "69b259915105a38cfa402a764f374e49c5d135ae4ea05a89fc12c0465e728ffd",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2179299
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "5a1baeb2cf1f48be8ecb4c633c56d2d0fc75e08e0fb6d7d0a83fedbdf0d9763e",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2535
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "641ea71e77a2f2b13624c3f196bb4cb037e155b88b3768d14722a8cffd9ca394",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 616710
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-fastlob-tight-book; real sha256/bytes for every file."
+}

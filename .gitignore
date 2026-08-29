@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Model weights / caches (staged into the scoring image, not committed)
+/model-cache/
+
+# Local scratch
+*.log
+/out/
+
+# Safety: never commit the proprietary, local-only folder (it lives outside repos anyway)
+proprietary-DO-NOT-PUSH/
+
+# ABIDES writes per-run logs to ./log/<timestamp>/ at runtime
+log/
+
+# regression_suite/run_regression.py writes candidate run artifacts here
+run_outputs/
+
+# monitored-generator runtime log (not an artifact)
+regression_suite/gen_status.jsonl
+
+# organizer regeneration cache — units/ ships the self-contained reference copy
+regression_suite/reference_traces/

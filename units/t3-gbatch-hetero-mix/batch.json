@@ -1,0 +1,40 @@
+{
+  "n": 5,
+  "subs": [
+    {
+      "sub": "sub_00_noise",
+      "scenario_file": "scenarios/sub_00_noise.json",
+      "n_events": 8225,
+      "reference_trace_sha256": "53f051d40e860bc0ea940190fdbacab551b1624a8b60b2fcec7e33e76e800c95",
+      "reference_message_sha256": "e7f96c326882e51d3e12316c563fd003e2e8a023b808fd79b826097795da8a07"
+    },
+    {
+      "sub": "sub_01_value",
+      "scenario_file": "scenarios/sub_01_value.json",
+      "n_events": 8137,
+      "reference_trace_sha256": "dc756908aac1fe6615806a89493e64bdc4f37f154493666ee203ff6675c15d68",
+      "reference_message_sha256": "d1c7ccb3e5b5c081bf0420a6baf04e5fd39481e0656d530291cf692fe9761403"
+    },
+    {
+      "sub": "sub_02_mm",
+      "scenario_file": "scenarios/sub_02_mm.json",
+      "n_events": 24065,
+      "reference_trace_sha256": "38b4f456e15918a80869cfa7918f7d6e1a22bb45f92b9fb42dd7f60b64e70fce",
+      "reference_message_sha256": "1ef855f2f76394f82c7bd17a8cc590c319a1391f4dd5683a40c6cf8aa9fb768b"
+    },
+    {
+      "sub": "sub_03_momentum",
+      "scenario_file": "scenarios/sub_03_momentum.json",
+      "n_events": 8147,
+      "reference_trace_sha256": "d9d0fa28485959fb1035a15a66d1099c962a4e31022be70c182e05747fdd609a",
+      "reference_message_sha256": "0c0d22306edae4a3c98bbc3c42fb32559c91117d56099a9511e8e769baeb663a"
+    },
+    {
+      "sub": "sub_04_base",
+      "scenario_file": "scenarios/sub_04_base.json",
+      "n_events": 8138,
+      "reference_trace_sha256": "0cb70d26605f5b2014947983b20c6298be99aac8f43b491479d7c640347d067a",
+      "reference_message_sha256": "e868feefcd7df96559cb2bd2fdf3b2895114af7a34074d6c05406fa499141159"
+    }
+  ]
+}

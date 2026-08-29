@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-st01-liquidity-churn-baseline",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "bdfebe882258944f0e3575fdbd3c03294d57c16925799883bc496801dcca8e4f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2285
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "861d8cbb327af7145b93244b6bd0ec47e2858f29619c8de90d7ade498af8d0af",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 385
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "eb3bbcdafdcea36523e4ccf57c4626c4dafe68afd47de76194d1380bc50d5971",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2050560
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "fa3f7e85501068d1deb140242eed9407bb4f2df5a438badab4d3ce3f321bbd22",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3066
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "fb40d7778f6d40c084fe9cf3bfb2e2a30a784edf0e40530a619b4510638af9dc",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 586820
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-st01-liquidity-churn-baseline; real sha256/bytes for every file."
+}

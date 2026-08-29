@@ -1,0 +1,10 @@
+{
+  "scenario_id": "386fac76-a776-5871-9ac7-e3d473cb4565",
+  "seed": 1754674525,
+  "n_events": 8148,
+  "wall_clock_sec": 0.5364896260000016,
+  "events_per_sec": 15187.618930771227,
+  "trace_sha256": "045f323473217c01fb29af9e454dd9ab59a919ec2cc9e13738ffeecba2192f46",
+  "n_messages": 7277,
+  "message_trace_sha256": "59bdbc66781d21e25087d8242e33ddff4ad2a28ccdbdc9c08551f39a513fee6c"
+}

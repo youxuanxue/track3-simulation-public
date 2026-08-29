@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-eq001-pareto-latency-tail",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "5255222d05df97cb6c76f512821000f115ac6b4cba8f7350ca62dc5c1670d68a",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2299
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "30945178acdff449e1afe0742eaf35f2f9a3c377a2c1727ba7d40267c131ba68",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 376
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "d0eb9464880da34f7097ed954430c721f060ba348d4afd807b6ae285db8bc859",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 623366
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "0db4f8f6062a99647434b66ed3abc1f73e08eb680b8455f6a8c95b87db16bc42",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2085
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "ca4b61563ed29516dee2a31be8fffc0326e31668c30078b0103a815c4bc76bcb",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 178113
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-eq001-pareto-latency-tail; real sha256/bytes for every file."
+}

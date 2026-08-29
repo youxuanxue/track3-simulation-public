@@ -1,0 +1,106 @@
+{
+  "_comment": "QFBench 2.0 Track 3 scenario template. Validate with: python -m qfbench2_common.validate scenario.json",
+  "scenario_id": "00000000-0000-0000-0000-000000000000",
+  "description": "REPLACE: One sentence describing the scenario.",
+  "scenario_family": "REPLACE",
+  "schema_version": 2,
+  "seed": 42,
+  "horizon_ns": 28800000000000,
+
+  "_comment_agent_mix": "Schema-required (sim_scenario.schema.json): agent type -> count summary. Must match the counts in agent_configs below.",
+  "agent_mix": {
+    "NoiseTrader": 100,
+    "ValueTrader": 20,
+    "MarketMaker": 5,
+    "MomentumTrader": 10
+  },
+
+  "exchange_config": {
+    "symbol": "SYM",
+    "tick_size": 1,
+    "lot_size": 1,
+    "min_price": 1,
+    "max_price": 1000000,
+    "stp_policy": "cancel_newest",
+    "order_types_allowed": ["LIMIT", "MARKET", "CANCEL", "REPLACE"]
+  },
+
+  "oracle_config": {
+    "type": "mean_reverting",
+    "params": {
+      "initial_price": 100000,
+      "kappa": 0.1,
+      "sigma": 0.001,
+      "dt_ns": 1000000,
+      "noise_type": "gaussian",
+      "jump_intensity": 0.0,
+      "jump_sigma": 0.0
+    }
+  },
+
+  "latency_config": {
+    "model": "log_normal",
+    "params": {
+      "mean_ns": 1000,
+      "sigma": 0.5,
+      "min_ns": 100,
+      "max_ns": 10000000
+    }
+  },
+
+  "agent_configs": [
+    {
+      "agent_type": "NoiseTrader",
+      "count": 100,
+      "params": {
+        "order_size_mean": 10,
+        "order_size_std": 2,
+        "arrival_rate_hz": 10.0,
+        "price_offset_ticks": 5
+      }
+    },
+    {
+      "agent_type": "ValueTrader",
+      "count": 20,
+      "params": {
+        "fundamental_value_source": "oracle",
+        "order_size_mean": 50,
+        "threshold_ticks": 3,
+        "arrival_rate_hz": 2.0
+      }
+    },
+    {
+      "agent_type": "MarketMaker",
+      "count": 5,
+      "params": {
+        "spread_ticks": 4,
+        "depth_levels": 5,
+        "size_per_level": 20,
+        "rebalance_interval_ns": 1000000
+      }
+    },
+    {
+      "agent_type": "MomentumTrader",
+      "count": 10,
+      "params": {
+        "lookback_ns": 5000000000,
+        "threshold_bps": 10.0,
+        "order_size_mean": 30
+      }
+    }
+  ],
+
+  "output_config": {
+    "trace_cols": ["t_ns", "agent_id", "msg_type", "side", "price", "size", "order_id"],
+    "events_fields": ["scenario_id", "n_events", "wall_clock_sec", "events_per_sec", "seed", "trace_sha256"],
+    "snapshot_interval_ns": 0
+  },
+
+  "tolerance": {
+    "tier": "A",
+    "timestamp_tolerance_ns": 1000,
+    "kendall_tau_floor": 0.999,
+    "spread_bps_tolerance": 10.0,
+    "oracle_rmse_tolerance_pct": 20.0
+  }
+}

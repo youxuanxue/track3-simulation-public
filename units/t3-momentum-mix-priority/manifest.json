@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-momentum-mix-priority",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "b9faee9a4abea2625af1b9b9f0124e86c3e836ca8672b5252ed61d20f2f66d7f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2331
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "edc8d94c3908d7e33cd9d955a2fddcc254f02fc5a0e1477fa558da08d3db70d9",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "45cd04aa3f3a874d5972f219534d2895442efe1853a1186991ad7d533ed959d7",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1866466
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "96009c5814c6fe6016fed5bc52530e9f4113f16ca58c29e2c72f1ae7121daf12",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2771
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "49dd9d2bb95890ce4649b7107362406c0864065c58e0dd3b9525c71534ae054e",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 548355
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-momentum-mix-priority; real sha256/bytes for every file."
+}

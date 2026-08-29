@@ -1,0 +1,242 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-gbatch-many-6",
+  "generated_by": "scripts/build_batch_units.py",
+  "files": [
+    {
+      "path": "batch.json",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "efe8177fb6d32cccc28bd4579797659e0add09a231c911a7b5dafe0e1b5cfcb5",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1883
+    },
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "253fa7591136cffd60d340876223c4add0bc51a66112dfaeb479737f351774f5",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1958
+    },
+    {
+      "path": "checks/reference_data/sub_00/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "8546d5758863453efa2439d5b6240a29defd612b55d97d831c166c48341377e7",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "checks/reference_data/sub_00/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "9a7465fb09198641f11ddb72f79822790793a5f8b6ec76c74ee7b6368c91c502",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 218887
+    },
+    {
+      "path": "checks/reference_data/sub_00/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "8e67ad0ddf2c913b2042ade64305848f55c189eeac3b1b370bd30045a22b0456",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 64787
+    },
+    {
+      "path": "checks/reference_data/sub_01/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "1556aa732a75b709756153acbfc9653b982b0de349baa8d71bb8abcc8fc25a09",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 382
+    },
+    {
+      "path": "checks/reference_data/sub_01/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "cacf7fdb7280489eab1c9ac7cf85df38ce19427afb6fb13552bbc90047526a24",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 218818
+    },
+    {
+      "path": "checks/reference_data/sub_01/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "2e82ce45ce376aebce9a8d78c57bceb7b4ed54be076c492246b8e7af856f53d2",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 64400
+    },
+    {
+      "path": "checks/reference_data/sub_02/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "623e1ccbed8f9d6cf678c60353007b3a44ba09a916faf309dbb989d2ef05e223",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 384
+    },
+    {
+      "path": "checks/reference_data/sub_02/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "d2a4c2b3e58bb2fb2be990e729f13151e270c79dbf5cddc2ad318dca5c2ccc50",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 219170
+    },
+    {
+      "path": "checks/reference_data/sub_02/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "ba9dc838d9d5f52475ff201d4ba9491912343a8a8823d59629c505547292a073",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 64710
+    },
+    {
+      "path": "checks/reference_data/sub_03/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "5d618255b005f4cf7ecd775282227322691c4e62c2e53bce72b4035f838099a5",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "checks/reference_data/sub_03/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "83afec64b56e2bf63e13c66279ab4a8bf74970bcfc232d9c0f2dd44f402e454e",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 218729
+    },
+    {
+      "path": "checks/reference_data/sub_03/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "aad5393686233f92bbb914a58818771715bd6cfee75fcb96f65200770ebedd5f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 64612
+    },
+    {
+      "path": "checks/reference_data/sub_04/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "88cf4d784764fdeb0a7d5e128a45e25bb03d9121fa5290c19e4b34af0a5fae59",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 384
+    },
+    {
+      "path": "checks/reference_data/sub_04/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "50688d0d0b6f94a816131a397c833e1cf70354690034ec06298c6c072f7d5919",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 219286
+    },
+    {
+      "path": "checks/reference_data/sub_04/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "0e2fb6a96d234f7e000925352813304ad1eb1d5866244a7ec0d46a5ab42ca01d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 64741
+    },
+    {
+      "path": "checks/reference_data/sub_05/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "20131339fc11048740e7055e6d4601d12403084e506f8aa3805eb8cf1f260a32",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 385
+    },
+    {
+      "path": "checks/reference_data/sub_05/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "6a43687a4da5c0b019c3c7194264fde64e903d327993393e4c43b50a3309f1ca",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 219473
+    },
+    {
+      "path": "checks/reference_data/sub_05/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "ae7530f7d13e43927d72af16286596080f68ffcaad083584c73586f50eff3494",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 65591
+    },
+    {
+      "path": "scenarios/sub_00.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "663b742bb673cd83ec4ed060c3d1be623cf048af630d71f7d374241cd01c1f6d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_01.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "e76d4763bc0ad1a7a221605c1df877015bfeb3ce03fd4d0fbf4c3842ce7fe518",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_02.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "fb64c3a78c70746562f1ac3029dfe8061ee7a0b2687e0096c1ecbf0c750c64ae",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_03.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "3f098b7f013d1d743f1503b76e44d111b42bbefdb59d7d7b42b1e2d0f51bd9a9",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_04.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "c3b33823062e24e7de45a9c86991aa3cfc00c9f76d546f1771c62d42501d1899",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_05.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "b22c430a66d19becd529a5a65206a22a48cf2304df46781e9eaec3719a715223",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    }
+  ],
+  "notes": "Public-dev BatchMarketSim unit t3-gbatch-many-6; real sha256/bytes for every file."
+}

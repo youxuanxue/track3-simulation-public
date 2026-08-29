@@ -1,0 +1,32 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-REPLACE-WITH-UUID",
+  "generated_by": "qfbench2 track3 author",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "split": "public-dev",
+      "redistributable": true
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "split": "public-dev",
+      "redistributable": true
+    },
+    {
+      "path": "README.md",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "split": "public-dev",
+      "redistributable": true
+    }
+  ],
+  "notes": "Per-file manifest conforming to common/schemas/manifest.schema.json. Replace every all-zero sha256 with the real SHA-256 of each file, and the unit_id with the unit UUID. The ABIDES baseline fork is pinned in public/baselines/README.md (commit f9cbe51342b7dedd9587e4e069040d68a5c6477f)."
+}

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-multilevel-crossing",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "9228e1cd6992f8897c94643951f487a181e6f84f6ebe7a98c464a86680af1b36",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2327
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "1e72b0001d319599ce314ba4e1a255da241cdea3bcdf5453db7fb7725813d3c0",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 385
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "4f0e104efae1aaa6e547a7fa5047d9da2215b149a9c7b6a3812ab3f31a803010",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2025835
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "99a22e9dc9e8ffe21e6c207ff4a73fd0b2a76f6d419c3ee2141107405940f863",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2536
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "50ef3497408fe4c28b11a5ac64c4ba8421d4ad0d01f2b4849fa1bed656bd7bad",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 578194
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-multilevel-crossing; real sha256/bytes for every file."
+}

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-sf-05-deep-book-liquidity",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "615d9544d4748350483511deadf40bc3b242e3b28de6a880ea5b33f9346989aa",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2345
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "27806908d97ae084a847f9cea45f99dc2216c2f7092985fcd211b803005da5b8",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "a14202ff374a1db9d2a3b73f1079e3f365c09f12daf56c5596f4dfaae56dd6a9",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2363829
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "e7de45e6ee1ae4191af2c8b25ad1e6d422cf5d4497aae4221829f7400e62c6ec",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3211
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "95f278670382138d6a021e3317ed282be39df294e40c7df82084f38b9237f851",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 693471
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-sf-05-deep-book-liquidity; real sha256/bytes for every file."
+}

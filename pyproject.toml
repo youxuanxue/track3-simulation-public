@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qfbench2-track-simulation"
+version = "0.1.0"
+description = "Track 3 (Market Simulation) scoring package for QFBench 2.0 / Agenthon 2026."
+requires-python = ">=3.13"
+# The CodaBench scoring image installs this alongside qfbench2-common and calls
+# qfbench2_track_simulation.scoring.build_verifier(ctx) per unit.
+#
+# `qfbench2-common` is a BARE NAME and https://pypi.org/pypi/qfbench2-common/json returns 404, as
+# does this package's own name. `pip install qfbench2-track-simulation` therefore resolves nothing
+# today, and both names are squattable -- a dependency-confusion exposure, not just an
+# inconvenience. Every install path that exists names the git source and a pin:
+#
+#     pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@v2.3.1#subdirectory=common"
+#
+# Registering the names, or committing to a private index, is an organization action and remains
+# open. The requirement is declared here so the absence is a named dependency problem rather than
+# an ambient one.
+dependencies = [
+    "qfbench2-common",
+    "numpy>=1.26",
+    "pandas>=1.5",
+    "scipy>=1.10",
+    "pyarrow>=12",
+]
+
+[project.optional-dependencies]
+# Linters pinned so a local run matches CI exactly and a new upstream release cannot turn CI red on
+# unrelated code. Keep in sync with .github/workflows/ci.yml.
+dev = [
+    "ruff==0.4.7",
+    "mypy==1.13.0",
+    "pyarrow>=12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The hermetic suite is the default. Docker/GPU tests live in tests/integration behind the
+# `integration` marker and are deselected here, so `pytest tests/` cannot reach a daemon by
+# accident -- which it used to: one unit test shelled out to a real `docker run` and, on a
+# networked runner, attempted a registry pull. Run them explicitly with `-m integration`.
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs Docker, a GPU or a real participant image; never part of the unit suite",
+]
+
+[project.urls]
+Homepage = "https://github.com/Agenthon-2026/track3-simulation-public"
+
+[tool.setuptools.packages.find]
+include = ["qfbench2_track_simulation*"]

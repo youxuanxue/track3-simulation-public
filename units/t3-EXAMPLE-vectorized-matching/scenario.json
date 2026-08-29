@@ -1,0 +1,93 @@
+{
+  "_comment": "QFBench 2.0 Track 3 throughput-scale benchmark scenario. Validate with: python -m qfbench2_common.validate scenario.json",
+  "scenario_id": "b0b1b2b3-0001-4000-8000-000000000001",
+  "description": "Throughput benchmark: 200 noise traders + 10 market makers + 20 value traders, 1-hour horizon, deep book.",
+  "scenario_family": "throughput-scale",
+  "schema_version": 2,
+  "seed": 2001,
+  "horizon_ns": 3600000000000,
+
+  "agent_mix": {
+    "NoiseTrader": 200,
+    "MarketMaker": 10,
+    "ValueTrader": 20
+  },
+
+  "exchange_config": {
+    "symbol": "TST",
+    "tick_size": 1,
+    "lot_size": 1,
+    "min_price": 1,
+    "max_price": 10000000,
+    "stp_policy": "cancel_newest",
+    "order_types_allowed": ["LIMIT", "MARKET", "CANCEL", "REPLACE"]
+  },
+
+  "oracle_config": {
+    "type": "mean_reverting",
+    "params": {
+      "initial_price": 500000,
+      "kappa": 0.05,
+      "sigma": 0.0008,
+      "dt_ns": 1000000,
+      "noise_type": "gaussian",
+      "jump_intensity": 0.0,
+      "jump_sigma": 0.0
+    }
+  },
+
+  "latency_config": {
+    "model": "log_normal",
+    "params": {
+      "mean_ns": 2000,
+      "sigma": 0.8,
+      "min_ns": 100,
+      "max_ns": 5000000
+    }
+  },
+
+  "agent_configs": [
+    {
+      "agent_type": "NoiseTrader",
+      "count": 200,
+      "params": {
+        "arrival_rate_hz": 50.0,
+        "order_size_mean": 10,
+        "order_size_std": 2,
+        "price_offset_ticks": 5
+      }
+    },
+    {
+      "agent_type": "MarketMaker",
+      "count": 10,
+      "params": {
+        "spread_ticks": 4,
+        "depth_levels": 10,
+        "size_per_level": 25,
+        "rebalance_interval_ns": 500000
+      }
+    },
+    {
+      "agent_type": "ValueTrader",
+      "count": 20,
+      "params": {
+        "fundamental_value_source": "oracle",
+        "threshold_ticks": 3,
+        "arrival_rate_hz": 2.0,
+        "order_size_mean": 50,
+        "order_size_std": 10
+      }
+    }
+  ],
+
+  "output_config": {
+    "trace_cols": ["t_ns", "agent_id", "msg_type", "side", "price", "size", "order_id"],
+    "events_fields": ["scenario_id", "n_events", "wall_clock_sec", "events_per_sec", "seed", "trace_sha256"],
+    "snapshot_interval_ns": 0
+  },
+
+  "tolerance": {
+    "tier": "A",
+    "timestamp_tolerance_ns": 1000
+  }
+}

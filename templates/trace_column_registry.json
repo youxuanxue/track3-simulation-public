@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "description": "Canonical Track 3 trace.parquet column and event-vocabulary registry. The authoritative JSON Schema is common/schemas/sim_scenario.schema.json; this file enumerates the exact column dtypes and message-type strings used by the regression harness (regression_suite/run_regression.py) and the baseline adapter (baselines/abides_fork/). Submissions must emit exactly these columns and message-type strings.",
+  "columns": [
+    {"name": "t_ns", "dtype": "int64", "description": "event timestamp in integer nanoseconds"},
+    {"name": "agent_id", "dtype": "int32", "description": "id of the agent that emitted the event; the exchange is agent 0"},
+    {"name": "msg_type", "dtype": "string", "description": "canonical message type; one of msg_types below"},
+    {"name": "side", "dtype": "string", "description": "order/quote side: BID, ASK, or null"},
+    {"name": "price", "dtype": "int64", "description": "price in integer ticks; 0 where not applicable"},
+    {"name": "size", "dtype": "int64", "description": "quantity in integer lots; 0 where not applicable"},
+    {"name": "order_id", "dtype": "int64", "description": "originating order id; -1 for events with no order (e.g. QUOTE_UPDATE)"}
+  ],
+  "msg_types": [
+    "ORDER_SUBMITTED",
+    "ORDER_ACCEPTED",
+    "ORDER_FILLED",
+    "PARTIAL_FILL",
+    "ORDER_CANCELLED",
+    "ORDER_REPLACED",
+    "QUOTE_UPDATE"
+  ],
+  "sides": ["BID", "ASK", null],
+  "semantics": {
+    "fill_msg_types": ["ORDER_FILLED", "PARTIAL_FILL"],
+    "quote_msg_types": ["QUOTE_UPDATE"],
+    "notes": "ORDER_FILLED is the final fill for an order_id; earlier fills of the same order_id are PARTIAL_FILL. QUOTE_UPDATE carries the resting best price for its side at t_ns (one row per (t_ns, side))."
+  }
+}

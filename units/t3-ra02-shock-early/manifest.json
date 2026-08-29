@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-ra02-shock-early",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "b58c8bc2fe553b822d1d977a4058ec4323329dc834f3fe25db14b6fb1c928c77",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2277
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "847347de4691745f0bd89423ef39097ab5b0e1e4fc358d09ffedae5c6e72021c",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 385
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "c52afadecbadb24148da2a235febdd6ffb1945c284b37f577744a992399011ed",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1163176
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "f2207fb934b91ab8681e100014c7cde7ecc31b9021f055f4de0b21ef9ea6123c",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3205
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "daf1d2920f511e9a497550bac99d9cb66ff183fce854db27a931e9334dc631c3",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 345584
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-ra02-shock-early; real sha256/bytes for every file."
+}

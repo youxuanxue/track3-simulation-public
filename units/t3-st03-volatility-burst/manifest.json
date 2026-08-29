@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-st03-volatility-burst",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "c836fee3f9dbcd3a82b23a334e902bfda1a4bcaa6f731a47b8731e7b402f2765",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2269
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "522703ac5fa37298e7b67ce3cc3448bacfc2a13f5760e13829735993caf6ef41",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 384
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "1a47e1c39efc6d36c695603fe26ede8a5bb692fe878d72e7b05ece61d8dd678d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2046374
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "196baf566854bbfcc050066443114db1436273beac6102ae9440174316420c4b",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3066
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "fa75d8173cc8f282f864febf9eebec810da8b5b250c0a99af440316954390205",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 589007
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-st03-volatility-burst; real sha256/bytes for every file."
+}

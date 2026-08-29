@@ -1,0 +1,33 @@
+{
+  "n": 4,
+  "subs": [
+    {
+      "sub": "sub_00_short",
+      "scenario_file": "scenarios/sub_00_short.json",
+      "n_events": 5095,
+      "reference_trace_sha256": "2ee03dd96def2bdff28392cc4bf786b8088fa015f39103b59da5b4eccd688116",
+      "reference_message_sha256": "12ad23fc316f7ad3a15c3de13e6def34a690bf002388cc8a9bc0664c8620f9af"
+    },
+    {
+      "sub": "sub_01_med",
+      "scenario_file": "scenarios/sub_01_med.json",
+      "n_events": 8146,
+      "reference_trace_sha256": "b4ba0e12cd4bdf587598040497fe82e4153ccce4eca599093c7d18494a4c58c8",
+      "reference_message_sha256": "2254b22d9eee3ff08df26b6656949bb8ce91954d8231776b62de053aa8fbc327"
+    },
+    {
+      "sub": "sub_02_long",
+      "scenario_file": "scenarios/sub_02_long.json",
+      "n_events": 12221,
+      "reference_trace_sha256": "e1cb95c4564a0ab4c4cbd8cc152e131e3d9d5c321eb65f8c5659879ef3a911d4",
+      "reference_message_sha256": "03300b4bd9fce1b70af8818780588e97711fafb1231bc75094b99ec74a84bb4b"
+    },
+    {
+      "sub": "sub_03_med",
+      "scenario_file": "scenarios/sub_03_med.json",
+      "n_events": 9177,
+      "reference_trace_sha256": "5aaab50d57cc91ea59b65587370816fc9b4438319fccb3ae174218d1d288e50f",
+      "reference_message_sha256": "8e0bb64c1f648f76d15c6f40712212fedf8ed5ffc6413aebc7daf45b8fdaa655"
+    }
+  ]
+}

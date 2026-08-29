@@ -1,0 +1,70 @@
+# =============================================================================
+# QFBench 2.0 Track 3 — Scenario Unit Card Template (card.toml v2)
+# Replace every REPLACE value. Authoring guide: public/AUTHORING-GUIDE.md
+# =============================================================================
+schema_version = "2.0"
+
+[task]
+id              = "t3-REPLACE-slug"     # lowercase preferred; globally unique
+track           = "simulation"
+title           = "REPLACE: short descriptive title"
+split           = "public-dev"          # public-dev | validation  (sealed family uses private-test)
+scenario_family = "REPLACE"             # matching-engine-semantics | agent-mix | latency-profile |
+                                        #   oracle-noise | calibration-stylized-facts | throughput-scale
+scenario_file   = "scenario.json"
+description     = "REPLACE: one paragraph — what matching-engine behavior must be preserved, baseline throughput, target acceleration."
+
+[metadata]
+author_name              = "REPLACE: Author Name"
+author_email             = "you@example.org"
+difficulty               = "hard"
+category                 = "REPLACE-scenario-family"
+tags                     = ["simulation", "lob", "REPLACE"]
+expert_time_estimate_min = 120.0
+junior_time_estimate_min = 600.0
+
+[provenance]
+license             = "BSD-3-Clause"
+data_source         = "organizer ABIDES fork reference traces"
+data_cutoff         = ""
+public_release_date = "2026-07-20"
+redistributable     = true
+manifest            = "manifest.json"
+# Canonical Track 3 ABIDES baseline pin (see public/baselines/README.md). Keep this
+# value unless you regenerated the reference trace against a different fork commit.
+abides_fork_commit  = "f9cbe51342b7dedd9587e4e069040d68a5c6477f"
+
+[contamination]
+canary_guid = "REPLACE-UUIDv4"
+
+[scoring]
+verifier            = "t3.semantic_stylized"
+metric              = "events_per_sec"      # higher better; ranks admissible submissions only
+admissibility_gates = ["g0_integrity", "g1_schema", "g2_cutoff_resource", "g3_domain_semantics"]
+
+[scoring.params]
+semantic_tier          = "A"      # A = exact fill sequence; B = statistical proximity
+timestamp_tolerance_ns = 1000
+kendall_tau_floor      = 0.999    # per-scenario override; the official gate reads it
+# Whether the message-level kernel ledger is a required output for this unit. Declared
+# here rather than inferred from whether a reference message_trace.parquet happens to
+# exist: a missing reference file used to switch the latency-causality gate OFF silently.
+requires_message_ledger = true    # false only for throughput-scale units that ship no ledger
+
+[scoring.params.stylized_fact_ceilings]
+ks         = 0.08
+acf_abs_l2 = 0.12
+hill_abs   = 1.5 
+depth_js   = 0.10
+
+[environment]
+cpus    = 4
+memory  = "16G"                   # format: <int>{M|G}
+gpu     = true
+network = "none"
+disk    = "10G"
+
+[io]
+input_schema         = "sim_scenario.schema.json"
+output_trace_cols    = ["t_ns", "agent_id", "msg_type", "side", "price", "size", "order_id"]
+output_events_fields = ["scenario_id", "n_events", "wall_clock_sec", "events_per_sec", "seed", "trace_sha256"]

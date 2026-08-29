@@ -1,0 +1,331 @@
+{
+  "_comment": "Generated from the scenario configs in this directory by regression_suite/build_reference_cache.py --reindex. run_regression.py does not read this file; it enumerates *.json and skips index.json.",
+  "count": 65,
+  "scenarios": [
+    {
+      "scenario_id": "abd7b2b8-ecba-5a6e-a7c3-dfac68beb0ad",
+      "config": "as01_base_mix.json",
+      "name": "as01_base_mix"
+    },
+    {
+      "scenario_id": "fe284cc5-c965-5cf6-9ff8-b375758c1ee6",
+      "config": "as02_scale_up_noise.json",
+      "name": "as02_scale_up_noise"
+    },
+    {
+      "scenario_id": "df79ad78-3db2-5770-8c82-64df5edd62b5",
+      "config": "as03_mm_liquidity_heavy.json",
+      "name": "as03_mm_liquidity_heavy"
+    },
+    {
+      "scenario_id": "8b1084a6-4f53-556a-9929-5afff3818858",
+      "config": "as04_value_heavy.json",
+      "name": "as04_value_heavy"
+    },
+    {
+      "scenario_id": "e2bb9fee-7150-5240-af64-ee1066e55564",
+      "config": "as05_oracle_variant.json",
+      "name": "as05_oracle_variant"
+    },
+    {
+      "scenario_id": "a350b90c-0348-5a64-8369-4d4d8bb3dbcd",
+      "config": "as06_throughput_fast.json",
+      "name": "as06_throughput_fast"
+    },
+    {
+      "scenario_id": "2bec943d-4f5f-5c8c-8ee3-b57550d936a6",
+      "config": "ca_baseline_calm.json",
+      "name": "ca_baseline_calm"
+    },
+    {
+      "scenario_id": "418157d5-26eb-5d5f-a000-217ec60a43a3",
+      "config": "ca_fast_mean_reversion.json",
+      "name": "ca_fast_mean_reversion"
+    },
+    {
+      "scenario_id": "683a0b4e-a386-5a7d-a8b2-e252cc6d9f7f",
+      "config": "ca_fat_tail_jumps.json",
+      "name": "ca_fat_tail_jumps"
+    },
+    {
+      "scenario_id": "16892744-6a80-5300-8552-ca18872438ea",
+      "config": "ca_high_volatility.json",
+      "name": "ca_high_volatility"
+    },
+    {
+      "scenario_id": "8a2f9219-014d-5d15-a7f2-efbad536db72",
+      "config": "ca_thin_book_depth.json",
+      "name": "ca_thin_book_depth"
+    },
+    {
+      "scenario_id": "73ae330d-1e33-5418-8266-44e8deea6571",
+      "config": "cancelmodify_lifecycle.json",
+      "name": "cancelmodify_lifecycle"
+    },
+    {
+      "scenario_id": "e32eaeba-515c-5fde-af46-44d5246d0805",
+      "config": "coarse_tick_ties.json",
+      "name": "coarse_tick_ties"
+    },
+    {
+      "scenario_id": "e90a1b02-0001-4a3c-8b21-0f1e2d3c4b5a",
+      "config": "eq001_pareto_latency_tail.json",
+      "name": "eq001_pareto_latency_tail"
+    },
+    {
+      "scenario_id": "14e79532-bbf4-5055-9b2f-7cb07791a6d7",
+      "config": "eq_deterministic_baseline.json",
+      "name": "eq_deterministic_baseline"
+    },
+    {
+      "scenario_id": "f1f0ca35-8c17-5843-8c31-3fca8ab5a46b",
+      "config": "eq_lognormal_highmag.json",
+      "name": "eq_lognormal_highmag"
+    },
+    {
+      "scenario_id": "38e61d08-72ee-594b-b999-ebdd4b2ba8ab",
+      "config": "eq_lognormal_highsigma.json",
+      "name": "eq_lognormal_highsigma"
+    },
+    {
+      "scenario_id": "2c9e14c7-6c6c-5288-823f-7ff82d6050fa",
+      "config": "eq_lognormal_lowsigma.json",
+      "name": "eq_lognormal_lowsigma"
+    },
+    {
+      "scenario_id": "d85a4b79-703d-54fb-8680-35d4c0059797",
+      "config": "eq_pareto_heavytail.json",
+      "name": "eq_pareto_heavytail"
+    },
+    {
+      "scenario_id": "4ff8463e-c268-5a14-b191-dcb374933011",
+      "config": "eq_uniform_tight.json",
+      "name": "eq_uniform_tight"
+    },
+    {
+      "scenario_id": "50076583-ba35-52ab-b3f0-a82ad328f10d",
+      "config": "eq_uniform_wide.json",
+      "name": "eq_uniform_wide"
+    },
+    {
+      "scenario_id": "e8650933-8e32-57db-8eb7-7b22231dce57",
+      "config": "fastlob_core.json",
+      "name": "fastlob_core"
+    },
+    {
+      "scenario_id": "55f80db0-96b2-50d7-8d6f-448f11a626bc",
+      "config": "fastlob_tight_book.json",
+      "name": "fastlob_tight_book"
+    },
+    {
+      "scenario_id": "b73c8c0e-15cd-5ca6-9b91-abd2c18b417f",
+      "config": "gb_base_30agent_30s.json",
+      "name": "gb_base_30agent_30s"
+    },
+    {
+      "scenario_id": "ed69678c-450f-5f69-83a0-b4cf31101f75",
+      "config": "gb_highfreq_40hz_60s.json",
+      "name": "gb_highfreq_40hz_60s"
+    },
+    {
+      "scenario_id": "2c78b9d2-b4c6-5342-88a2-c6d4cc70d2f1",
+      "config": "gb_horizon_240s.json",
+      "name": "gb_horizon_240s"
+    },
+    {
+      "scenario_id": "9b855004-0d35-5ed1-945f-5d5d299b64d8",
+      "config": "gb_mega_throughput.json",
+      "name": "gb_mega_throughput"
+    },
+    {
+      "scenario_id": "1c15fde8-5b8b-5fee-8274-a2ee8f5bedd5",
+      "config": "gb_pop_128_agents.json",
+      "name": "gb_pop_128_agents"
+    },
+    {
+      "scenario_id": "5f8fe817-da1a-56cd-b7ff-754f135c0029",
+      "config": "gb_pop_horizon_scale.json",
+      "name": "gb_pop_horizon_scale"
+    },
+    {
+      "scenario_id": "a4251e7c-c760-58d9-8707-7c6d4c7d8789",
+      "config": "momentum_mix_priority.json",
+      "name": "momentum_mix_priority"
+    },
+    {
+      "scenario_id": "a86b50cb-0785-56dd-bd58-9c3d317e49e5",
+      "config": "mp01_stp_newest_baseline.json",
+      "name": "mp01_stp_newest_baseline"
+    },
+    {
+      "scenario_id": "dfba64e0-cac2-5f16-b408-41de04ff2cae",
+      "config": "mp02_stp_oldest_baseline.json",
+      "name": "mp02_stp_oldest_baseline"
+    },
+    {
+      "scenario_id": "644c3665-1e55-5672-9497-55c1368b9e18",
+      "config": "mp03_mm_heavy_newest.json",
+      "name": "mp03_mm_heavy_newest"
+    },
+    {
+      "scenario_id": "7fc88018-85be-50d4-9159-dbc1cc44f525",
+      "config": "mp04_mm_heavy_oldest.json",
+      "name": "mp04_mm_heavy_oldest"
+    },
+    {
+      "scenario_id": "077d6642-7e7c-529b-876d-f37aa5f70190",
+      "config": "mp05_cancel_churn_newest.json",
+      "name": "mp05_cancel_churn_newest"
+    },
+    {
+      "scenario_id": "001d9e77-7666-5f5b-9e3e-723daed0cbe8",
+      "config": "mp06_tight_spread_selfcross.json",
+      "name": "mp06_tight_spread_selfcross"
+    },
+    {
+      "scenario_id": "647ddddf-b30b-5323-98ce-e1b9da65bb76",
+      "config": "mp07_heavy_flow_oldest.json",
+      "name": "mp07_heavy_flow_oldest"
+    },
+    {
+      "scenario_id": "60f3db6d-9305-543b-8388-b9a4a887f255",
+      "config": "mr_cancel_replace_churn.json",
+      "name": "mr_cancel_replace_churn"
+    },
+    {
+      "scenario_id": "c5c25713-e1b2-50e8-bb08-f0216b9d4a72",
+      "config": "mr_checkpoint_cadence_fine.json",
+      "name": "mr_checkpoint_cadence_fine"
+    },
+    {
+      "scenario_id": "8a59be07-bb4b-5eec-b8ab-7cbc27fc6735",
+      "config": "mr_deep_book_state_size.json",
+      "name": "mr_deep_book_state_size"
+    },
+    {
+      "scenario_id": "73203dc3-1a14-5976-81e8-8fcec979ae7f",
+      "config": "mr_long_horizon_replay.json",
+      "name": "mr_long_horizon_replay"
+    },
+    {
+      "scenario_id": "998e5c53-30cb-5ad4-b4b2-4c3791edd002",
+      "config": "multilevel_crossing.json",
+      "name": "multilevel_crossing"
+    },
+    {
+      "scenario_id": "2b0ae926-c496-536c-a826-9738944667ed",
+      "config": "partialfill_atomicity.json",
+      "name": "partialfill_atomicity"
+    },
+    {
+      "scenario_id": "66ea1f06-132d-58ac-8a27-cc8d45953215",
+      "config": "ra01_fundamental_shock_mid.json",
+      "name": "ra01_fundamental_shock_mid"
+    },
+    {
+      "scenario_id": "4f876cd0-76bb-5369-bd07-a575b4249c12",
+      "config": "ra02_shock_early.json",
+      "name": "ra02_shock_early"
+    },
+    {
+      "scenario_id": "31546dd0-026f-5db8-989f-d85a6a2dace9",
+      "config": "ra03_large_shock.json",
+      "name": "ra03_large_shock"
+    },
+    {
+      "scenario_id": "bcd382f5-0924-5d48-99f5-7d4075c0d674",
+      "config": "ra04_shock_late.json",
+      "name": "ra04_shock_late"
+    },
+    {
+      "scenario_id": "ccb06368-afbd-5c1a-ac9a-2fd72ce9ebe0",
+      "config": "ra05_shock_momentum_heavy.json",
+      "name": "ra05_shock_momentum_heavy"
+    },
+    {
+      "scenario_id": "c85a5154-b948-5aff-89e7-d5c8ce61ea4d",
+      "config": "ra06_shock_value_heavy.json",
+      "name": "ra06_shock_value_heavy"
+    },
+    {
+      "scenario_id": "a1b2c3d4-0001-0000-0000-000000000001",
+      "config": "s001_price_time_priority.json",
+      "name": "s001_price_time_priority"
+    },
+    {
+      "scenario_id": "a1b2c3d4-0012-0000-0000-000000000012",
+      "config": "s012_partial_fill_cancel_race.json",
+      "name": "s012_partial_fill_cancel_race"
+    },
+    {
+      "scenario_id": "a1b2c3d4-0019-0000-0000-000000000019",
+      "config": "s019_latency_jitter_kendall.json",
+      "name": "s019_latency_jitter_kendall"
+    },
+    {
+      "scenario_id": "7a903ca0-a2cb-5061-85be-2885929f64c1",
+      "config": "sf_01_baseline_regime.json",
+      "name": "sf_01_baseline_regime"
+    },
+    {
+      "scenario_id": "f596295c-e1e4-534d-ad0a-8cfc098bc609",
+      "config": "sf_02_heavy_jump_tails.json",
+      "name": "sf_02_heavy_jump_tails"
+    },
+    {
+      "scenario_id": "8c53af6a-f534-57fa-a048-e4e591f7dfb8",
+      "config": "sf_03_vol_clustering_momentum.json",
+      "name": "sf_03_vol_clustering_momentum"
+    },
+    {
+      "scenario_id": "056e6f9a-1891-5197-8988-e410f7884ba6",
+      "config": "sf_04_thin_book_depth.json",
+      "name": "sf_04_thin_book_depth"
+    },
+    {
+      "scenario_id": "3118b1c8-f45b-56fc-9447-a49cfa38a8b9",
+      "config": "sf_05_deep_book_liquidity.json",
+      "name": "sf_05_deep_book_liquidity"
+    },
+    {
+      "scenario_id": "0bfd6969-c241-57eb-8d6e-6de1388cb183",
+      "config": "sf_06_high_fundamental_vol.json",
+      "name": "sf_06_high_fundamental_vol"
+    },
+    {
+      "scenario_id": "acbaff26-109b-5856-af00-0603bde931ea",
+      "config": "sf_07_coarse_agent_batch.json",
+      "name": "sf_07_coarse_agent_batch"
+    },
+    {
+      "scenario_id": "20d717b4-9f62-5c55-946d-317b281292e8",
+      "config": "st01_liquidity_churn_baseline.json",
+      "name": "st01_liquidity_churn_baseline"
+    },
+    {
+      "scenario_id": "406cfe13-1d13-57a6-a6ba-707a55b2236f",
+      "config": "st02_informed_entry_burst.json",
+      "name": "st02_informed_entry_burst"
+    },
+    {
+      "scenario_id": "dec8b800-21b1-5a05-84b0-8d1474130202",
+      "config": "st03_volatility_burst.json",
+      "name": "st03_volatility_burst"
+    },
+    {
+      "scenario_id": "493d1d62-88f8-507b-9c8e-84aff7737a49",
+      "config": "st04_thin_book_mm_strain.json",
+      "name": "st04_thin_book_mm_strain"
+    },
+    {
+      "scenario_id": "af38a808-c9db-54cb-8604-75e1bf79759c",
+      "config": "st05_latency_spike_pareto.json",
+      "name": "st05_latency_spike_pareto"
+    },
+    {
+      "scenario_id": "94f530d4-8b56-5395-85a5-af0a9ef53356",
+      "config": "stp_cancel_newest.json",
+      "name": "stp_cancel_newest"
+    }
+  ]
+}

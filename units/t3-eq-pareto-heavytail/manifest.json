@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-eq-pareto-heavytail",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "3fe5297163cc43046a9bbe3cbd76c6cc92d083628a4c3e837c6209c649e5ae35",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2287
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "d17303438788860e1a8860e8b2e892e092b25270ed7116ffa16e006ca28a516a",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 386
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "2a6f3b5aa6071d102344d07da82281301995850b9a2f50fa80e04592cc9099b3",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 566149
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "1a380211f9167f06cd9bb87469ce15e6b34e893fee354a8641073f9efe8d0101",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2867
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "a84cce701b39b3dc8e0874887038a55b5972429a772596463c0f86f540ce3f8f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 163109
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-eq-pareto-heavytail; real sha256/bytes for every file."
+}

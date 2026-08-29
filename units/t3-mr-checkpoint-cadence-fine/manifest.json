@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-mr-checkpoint-cadence-fine",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "356410378c2e1aea0161a2daece9f39d1b771426904bd91f60cf8ed795fb3a84",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2341
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "c0c03a0d46bedea06b281bfb6d39598b3e8ef5bbf474a1a2a888e54716eceea6",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 387
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "6016414e7c36ea9c85c26dd9a0cb9faed8b0dcef892bb232e1f99635503e55c6",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 4397448
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "959fde96f8bd3356e502b249410e948dce7eb78d8a063a60253d216cb18b523a",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2798
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "5838617f75fb95b149962f98705afaa2a1cd5e9b8f84bc9f96da169e95528c88",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1296619
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-mr-checkpoint-cadence-fine; real sha256/bytes for every file."
+}

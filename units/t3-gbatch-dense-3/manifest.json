@@ -1,0 +1,134 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-gbatch-dense-3",
+  "generated_by": "scripts/build_batch_units.py",
+  "files": [
+    {
+      "path": "batch.json",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "0966f953b0c8bd48e86dbdacd792b5d4bb9ae4b01e1f6928d7535a81012ee49b",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 956
+    },
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "c94cd7e4be4e931e28f9758ba5bd5e3657834a421cf65c190a853b53693beede",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1960
+    },
+    {
+      "path": "checks/reference_data/sub_00/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "56b73074786e7fb57573fb5c3f99d774133e0e2d8788c2af79653d9b5a948946",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "checks/reference_data/sub_00/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "ca96c9876c339f096ba3806fdcd55e617869fbd6de9943f7a54356f5a2ef0f35",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 222862
+    },
+    {
+      "path": "checks/reference_data/sub_00/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "12c8ad464d61ae53671b05585f1d6ac912d249f5e00ea078c58e6f888e2a499a",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 65663
+    },
+    {
+      "path": "checks/reference_data/sub_01/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "0aa334f5ccda6a785fc10d25683b4b7e7ed163e0afff79fcd322c5836f4b5338",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 383
+    },
+    {
+      "path": "checks/reference_data/sub_01/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "4377673571acdafb8c094ab7bc6b24cd5628a2ae2ef2596a829ef8f4b4562bea",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 222747
+    },
+    {
+      "path": "checks/reference_data/sub_01/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "c28aa4ea7b03905a5807a50db7946e7441779d1cf33177bc40a522892cd9add4",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 65694
+    },
+    {
+      "path": "checks/reference_data/sub_02/events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "948289ac85ccb5a4de9fba27541392613469b467fe133211b67bf2dc5955b33b",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 384
+    },
+    {
+      "path": "checks/reference_data/sub_02/message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "c1dca14fa5dc5759db198ff7dc46870242b73dc5b2152a219ca067cb3e6298fb",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 222622
+    },
+    {
+      "path": "checks/reference_data/sub_02/trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "0ecfb5b5173584e135c701bf0505c2b85bb38ec85a4ee7cc9732fb0d5167c060",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 66374
+    },
+    {
+      "path": "scenarios/sub_00.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "9a9d4cd9dce7c7f2bfc12850ded33f41a10f81248cdfede641f5fa5f3b7ecfe1",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    },
+    {
+      "path": "scenarios/sub_01.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "1a24135722a2def77bcaa973e815fe6ecea4db4facc1893b29d8fd61eba48a11",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2405
+    },
+    {
+      "path": "scenarios/sub_02.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "978f69de92025fb71735127313df5d60d2abc8c399bbc8f3524edb4bb29c5cbf",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2406
+    }
+  ],
+  "notes": "Public-dev BatchMarketSim unit t3-gbatch-dense-3; real sha256/bytes for every file."
+}

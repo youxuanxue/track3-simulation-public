@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-s012-partial-fill-cancel-race",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "ef9c5adcf0d63918fdd595c770f80a00e3245102b426d14f012fc48e9fb4343d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2347
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "58e95032247ddbf083d23a9724ef1e08857abbc85625ac4bd0da7f487f813a7c",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 381
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "4e1977ea5947ed2c8253dd540793eaf65e8e72269502d9a9a0023c71df0492e4",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 5325700
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "944e6bcce6db0f7693378e135ba4913fe7304e894026377dade7e18e1bd25e9c",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2286
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "259ef9b786471156e32cbfba678f279d6ad3a7991e0d03ed20a530f71e05887e",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1642219
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-s012-partial-fill-cancel-race; real sha256/bytes for every file."
+}

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-ca-fat-tail-jumps",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "e9a2f06914f847c18aed96a85d20109329ab6ace6e06f3d4dfa626694efb1ae2",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2329
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "837a485e1261f63dc103db791dbb450981921e2510b3c68064c9d81e3732bebd",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 385
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "e14cf8d5d0a65ab3a7fd686c1a6ece8042e5a8ca7293602c29830b0d9acd62e2",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1318752
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "25df96f8a234fd841cee8afcaaa8bd5933f5cf55844a44f26e883804b66421f1",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3053
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "424a3b612f0e10b252ff4df68054aedc2a2e5643c55dac9f8142b62525c3868d",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 405663
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-ca-fat-tail-jumps; real sha256/bytes for every file."
+}

@@ -1,0 +1,53 @@
+{
+  "manifest_version": "2.0",
+  "unit_id": "t3-as03-mm-liquidity-heavy",
+  "generated_by": "scripts/build_public_units.py",
+  "files": [
+    {
+      "path": "card.toml",
+      "role": "fixture",
+      "license": "CC-BY-4.0",
+      "sha256": "bc7cff51af4432ac0d3804072974b805d0a73c1a8d5d1e6298c9db34cef55683",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 2273
+    },
+    {
+      "path": "events.json",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "73970888a4815bdbe468e31750fa2ab73f9858ae0bf7ae716eeadd3a67287c97",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 384
+    },
+    {
+      "path": "message_trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "1e3b96d1fd9d13d5cbe97e0acf2c7c818860403730d1f6230319024796efd22f",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 1484010
+    },
+    {
+      "path": "scenario.json",
+      "role": "scenario",
+      "license": "CC-BY-4.0",
+      "sha256": "24bd5ae8a6b122a8fdce91285ac0f62f369851ee916495d7a3e70157b16018f4",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 3000
+    },
+    {
+      "path": "trace.parquet",
+      "role": "reference",
+      "license": "CC-BY-4.0",
+      "sha256": "cda4d421e99a0d3b459eb25e8d246a846e3aa6ac4e6beb27c5b95f52b6c11430",
+      "split": "public-dev",
+      "redistributable": true,
+      "bytes": 485581
+    }
+  ],
+  "notes": "Public-dev Track-3 practice unit t3-as03-mm-liquidity-heavy; real sha256/bytes for every file."
+}

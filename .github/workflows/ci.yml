@@ -1,0 +1,183 @@
+name: Track 3 CI
+
+# Each track repo's root IS the public folder, so all paths below are root-relative.
+on:
+  push:
+    branches: [main, "task/**", "track3/**"]
+  pull_request:
+    branches: [main]
+
+env:
+  # The single place this workflow names a toolkit revision. Both jobs that install
+  # `qfbench2-common` read it, so a bump is a one-line change and the two can never drift.
+  #
+  # This is the release TAG of Agenthon-2026/Agenthon2026-public that carries the frozen
+  # contract set, and it is the SAME string the README's install command pins. It must stay a
+  # tag and never a branch: an unpinned toolkit means a local result and a scored result can
+  # diverge silently, which is the one failure mode the pin exists to prevent.
+  QFBENCH2_COMMON_REF: v2.3.1
+
+jobs:
+  # Runs FIRST and does not install the shared toolkit, so it survives anything that can go
+  # wrong with that install below (an unresolvable ref, a bad tag, a network failure). Steps
+  # after a failed install are SKIPPED, so any check placed behind one silently does not run
+  # in exactly the case that matters most. Everything here needs only the stdlib plus pyarrow,
+  # which is plain PyPI.
+  firewall:
+    name: Firewall + integrity guards (no secret — runs on forks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        # No lfs: these guards read cards and build their own fixtures. The manifest
+        # sha256/bytes check that needs real parquet content stays in validate-units.
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install pyarrow (no token required)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pyarrow>=12"
+      - name: Card, track, split and canary checks
+        run: python .github/validate_units.py simulation --stdlib-only
+      # These three moved here from lint-type, whose first step installs the shared toolkit
+      # -- so a failed install skipped them, despite their own comment correctly noting they
+      # are stdlib + pyarrow only. They guard the award-integrity contract and host-side
+      # event counting, which is precisely what must not be skippable.
+      - name: Award-integrity tests
+        run: python tests/test_award_integrity.py
+      - name: Unit-runner tests (routing, staging, host counting, node fingerprint)
+        run: python tests/test_run_unit.py
+      - name: Verb-dispatch tests (simulate vs simulate-batch)
+        run: python tests/test_verb_dispatch.py
+      # Same rationale: the ranked events/sec must come from the harness measurement when one
+      # exists, because wall_clock_sec in a submission's own events.json is checked against
+      # nothing. That guard must not be skippable on a fork PR either. Loads host_metrics.py
+      # straight from its file, so it needs no toolkit and not even pyarrow.
+      # The ranked events/sec must come from the trusted C2 record. This guard now asserts the
+      # REMOVAL of the participant-rate fallback -- `resolve()`, `strict_mode()` and the
+      # QFB2_T3_REQUIRE_HOST_TELEMETRY flag are gone -- and that everything the developer profile
+      # emits says rankable=false. Loads host_metrics.py straight from its file, so it needs no
+      # toolkit and not even pyarrow, and must not be skippable on a fork PR.
+      - name: Developer-profile guard (no rankable self-report fallback)
+        run: python tests/test_host_metrics.py
+      # Card drift guard. Cards are GENERATED, so a value edited in units/ but not in the generator
+      # survives only until the next regeneration -- which is how every card came to carry
+      # `gpu = true` while both generators still emitted `false`. Stdlib-only; its one
+      # toolkit-backed check (cluster_key) skips loudly here and runs in lint-type below.
+      - name: Card invariants (GPU contract, ledger declaration, generator drift)
+        run: python tests/test_unit_cards.py
+      # The README's quick start is executable documentation, so it is executed. Two published
+      # commands shipped broken: `pip install -e ".[all]"` from the ABIDES root (exit 1, no
+      # top-level project) and three `timer.py` invocations missing the `--scenario` its own parser
+      # marks required (exit 2). Both are now parsed by the real CLI rather than trusted as prose.
+      # Stdlib-only (the timer's parser is loaded from its file), so it belongs in this
+      # no-secret job.
+      - name: README command guards (published commands parse; toolkit caveat present)
+        run: python tests/test_readme_commands.py
+
+  lint-type:
+    name: Lint + type check (ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install tools + shared toolkit
+        run: |
+          python -m pip install --upgrade pip
+          # mypy 1.13.0 is the earliest release that type-checks numpy 2.x correctly: 1.10.0 reads
+          # npt.NDArray as a variable rather than a type alias and misreads the np.histogram result,
+          # which produces spurious errors once the toolkit resolves numpy 2.x. Smallest bump that
+          # checks the tree clean. Keep in sync with the [dev] extra.
+          # pandas is the toolkit's [data] extra, not a base dependency, so it is named explicitly:
+          # the batch isolation gate imports it, and its tests run in this job.
+          # pytest and scipy are named explicitly: the gates below are pytest modules and
+          # the semantic checks use scipy's two-sample KS. Leaving either to be pulled in
+          # transitively is how a job starts passing for the wrong reason.
+          pip install "ruff==0.4.7" "mypy==1.13.0" "pyarrow>=12" "pandas>=2.2" \
+                      "scipy>=1.10" "pytest>=8"
+          # Participant-facing CI installs the toolkit ANONYMOUSLY from the public toolkit
+          # repository, with no credential. That is what lets this job run on fork pull
+          # requests: GitHub withholds repository secrets from forks, so an install gated on
+          # one dies at `pip install` before any check is reached. Nothing here needs the
+          # private hub — `qfbench2-common` is published from Agenthon2026-public/common.
+          pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+      - name: Ruff lint
+        run: ruff check qfbench2_track_simulation throughput regression_suite baselines/abides_fork
+      - name: Ruff format check
+        run: ruff format --check qfbench2_track_simulation throughput regression_suite baselines/abides_fork
+      - name: Mypy (strict)
+        run: mypy --strict --ignore-missing-imports qfbench2_track_simulation throughput regression_suite/run_regression.py baselines/abides_fork
+      # Guard the batch isolation gate's ledger split: self-consistency is candidate-only and must
+      # run on EVERY sub, while reference-equivalence runs only where a reference ledger ships. This
+      # one cannot join the `firewall` job -- importing qfbench2_track_simulation.batch pulls in the
+      # package __init__, hence .scoring, hence the shared toolkit.
+      # These gates all import qfbench2_track_simulation, so they cannot join the
+      # `firewall` job -- the package __init__ pulls in .scoring and therefore the shared
+      # toolkit. That is fine and is NOT a skipped-green risk: this job installs the toolkit as its
+      # first step, so a failed toolkit install fails RED at that step rather than skipping.
+      - name: Batch isolation tests (ledger by declaration, not by file existence)
+        run: python tests/test_batch_isolation.py
+      - name: Ranked-timing tests (C2/C7 binding, every repeat validated, no fallback)
+        run: python -m pytest tests/test_telemetry_binding.py -q
+      - name: Semantic exactness tests (no intersection, no prefix, no truncation, no NaN)
+        run: python -m pytest tests/test_semantics_exactness.py -q
+      - name: Message-ledger completeness tests (card declaration, reference-relative floor)
+        run: python -m pytest tests/test_ledger_completeness.py -q
+      - name: Clip-ceiling derivation tests (the C1 metric domain)
+        run: python -m pytest tests/test_domain_ceiling.py -q
+      - name: Scoring-gate tests (two named factories, organizer faults, contained parsers)
+        run: python -m pytest tests/test_scoring_gate.py -q
+      - name: Malicious-output tests (shared adversarial corpus + Track 3 allowlist)
+        run: python -m pytest tests/test_malicious_output.py -q
+      - name: Contract-boundary tests (Hub C1/C2/C5/C7 fixtures)
+        run: python -m pytest tests/test_contract_boundary.py -q
+      # Re-run with the toolkit present so the cluster_key check actually executes: it imports
+      # qfbench2_track_simulation, so in the firewall job it reports SKIP rather than running.
+      # QFB2_T3_REQUIRE_TOOLKIT turns that SKIP into a FAILURE here, because in this job the
+      # dependency IS installed -- a check that reports SKIP is not a check that passed, and a
+      # summary line counting it as one is the skipped-green defect in miniature.
+      - name: Card invariants incl. cluster_key (toolkit present, skips are failures)
+        env:
+          QFB2_T3_REQUIRE_TOOLKIT: "1"
+        run: python tests/test_unit_cards.py
+      # The award-integrity, unit-runner and verb-dispatch guards moved to the `firewall`
+      # job above. They are stdlib + pyarrow, as the comment here always said -- but this
+      # job's first step installs the shared toolkit, so a failed install skipped them.
+
+  # The toolkit-backed half. Every check here sits behind the toolkit install and disappears
+  # if that install breaks, which is why the firewall job above exists — do not fold these
+  # back together.
+  validate-units:
+    name: Validate units (+ manifests · public-safety)
+    needs: firewall
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          lfs: true  # units' *.parquet are lfs-tracked; the manifest sha256/bytes check needs the
+                     # real content, not the 131-byte pointer stubs (the lint job needs no lfs).
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install shared toolkit
+        run: |
+          python -m pip install --upgrade pip
+          # pandas/pyarrow/pytest are named for the corpus acceptance step below, not for
+          # validate_units.py, which is stdlib-only. Same reason the lint job names them: leaving
+          # either to arrive transitively is how a job starts passing for the wrong reason.
+          pip install "pyarrow>=12" "pandas>=2.2" "scipy>=1.10" "pytest>=8"
+          # Public toolkit repository, no credential — see the note in the lint-type job.
+          pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
+      - name: Validate all public units
+        run: python .github/validate_units.py simulation
+      # The acceptance test for the candidate-side ledger gate: every shipped reference ledger must
+      # pass it, because a perfect submission emits exactly the reference. It reads units/*.parquet,
+      # so it belongs in THIS job -- the lint job checks out without lfs and sees pointer stubs,
+      # where the same test skips. QFB2_T3_REQUIRE_LFS turns that skip into a failure here, since
+      # this job fetched the corpus and a skip would mean the acceptance evidence never ran.
+      - name: Reference-ledger acceptance (candidate gate admits every shipped reference)
+        env:
+          QFB2_T3_REQUIRE_LFS: "1"
+        run: python -m pytest tests/test_ledger_completeness.py -q

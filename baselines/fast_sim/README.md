@@ -184,3 +184,39 @@ gb_mega 98.9k–103.6k. Official B200 worker will differ.
 The PriceLevel Python bounce is gone. Leftover wall is still
 `Kernel.run` billed to Python, extract, and agent callbacks. Agents
 are **not** rewritten on this step.
+
+## Championship step 3 (reverted)
+
+Post-step-2 wall (this host): kernel ~80% of wall, `extract_trace`
+~13%, message-ledger extract ~6–7%. One structural cut was attempted
+and **reverted** — Family 1 did not stay exact.
+
+**What was tried:** keep Python `Message` / `LimitOrder` only at the
+agent `receive_message` / `place` boundary; put exchange hops on the
+C heap as `(kind, payload, message_id)` (same `(deliver_at, sid, rid,
+message_id)` key); write trace + message ledger as parallel columns
+instead of per-row 10-tuples.
+
+**Invariant that broke (s001):** in-hours fills / accepts / cancels
+still matched, but the run emitted **+9 LimitOrderMsg**, **+4
+CancelOrderMsg**, and **+13 MarketClosedMsg** after `mkt_close`.
+`ORDER_SUBMITTED` grew 120→129. Wakeups and QuerySpread counts were
+unchanged (84 / 74). The extra orders were a last MM/trader wave
+whose acks were `MarketClosedMsg` — those rows are absent from the
+reference ledger. Same extra-row pattern on `stp_cancel_newest` and
+`partialfill_atomicity`. So the gate failed on **post-close
+message-ledger composition / extra after-close submits**, not on
+price-time fills.
+
+No speed is claimed. Step 2 numbers stand.
+
+**What a 10× from ~145k / ~104k would actually take:** kernel is
+still ~80% after compiling the queue and the book. The leftover
+kernel time is Python agents (`order_executed`, MM/Value `act`,
+numpy `RandomState` draws) plus `Message`/`LimitOrder` construction
+on the agent side of every hop. Extract is ~20% and is not 10× by
+itself. A 10× (~1.4M / ~1.0M ev/s) needs **compiled Noise / MM /
+Value / Momentum with a bit-exact `RandomState` stand-in**, and
+only then a second pass at compact hops that does not let an extra
+`act()` through after close. GPU still only for independent
+`simulate-batch` scenarios.

@@ -10,10 +10,8 @@ and the Phase 3–6 cuts of the Python tax each profiler pass named.
 Phase 6 compiled the remaining hubs and then hit diminishing returns
 (<10% on both throughput units). Championship step 1 replaced the
 Python tuple heap with a C `EventQueue`. Step 2 inlines PriceLevel
-ops and compiles `cancel_order` inside the same Cython book.
-Step 3 keeps Python ``Message`` / ``LimitOrder`` only at the agent
-boundary; exchange hops are compact C events and the ledger/trace
-are written column-wise. Leftover agents stay Python. No GPU.
+ops and compiles `cancel_order` inside the same Cython book;
+leftover agents stay Python. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -186,19 +184,3 @@ gb_mega 98.9k–103.6k. Official B200 worker will differ.
 The PriceLevel Python bounce is gone. Leftover wall is still
 `Kernel.run` billed to Python, extract, and agent callbacks. Agents
 are **not** rewritten on this step.
-
-## Championship step 3 (this change)
-
-Post-step-2 wall (this host): kernel ~80%, `extract_trace` ~13%,
-message ledger ~7%. One structural cut, not more book wrappers:
-
-- Exchange-internal hops (limit / cancel / spread / exec / accept /
-  wakeup) sit on the C heap as `(kind, payload, message_id)` — no
-  Python ``Message`` until an agent ``receive_message``.
-- ``message_id`` is still assigned in ABIDES construction order.
-- Trace and message ledger are parallel columns (`ColumnTrace` /
-  `ColumnLedger`), not per-row dicts or 10-tuples.
-
-Family 1 14/14 + as06 + one MP + one RA must stay exact. Throughput
-vs step 2 (~145k / ~104k) is measured after that gate. If both units
-move &lt;10%, stop: the next 10× is compiling leftover agents + RNG.

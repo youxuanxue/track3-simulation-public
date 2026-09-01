@@ -370,10 +370,6 @@ def extract_message_trace_from_state(end_state: dict[str, Any]) -> pd.DataFrame:
     Phase 4 prefers ``delivered_ledger`` (already in delivery-seq order) so the
     join against ``deliver_seq_by_key`` is skipped on the official path.
     """
-    col = end_state.get("col_ledger")
-    if col is not None:
-        return col.to_dataframe()
-
     delivered = end_state.get("delivered_ledger")
     if delivered:
         return _message_df_from_rows(delivered)

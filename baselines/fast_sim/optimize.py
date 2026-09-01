@@ -70,19 +70,9 @@ def _filtered_log_event(
             parts = event.split(",")
             if len(parts) == 3:
                 try:
-                    tr = getattr(getattr(self, "kernel", None), "_col_trace", None)
-                    if tr is not None:
-                        tr.add_quote(
-                            self.current_time,
-                            event_type == "BEST_BID",
-                            int(parts[1]),
-                            int(parts[2]),
-                            self.id,
-                        )
-                    else:
-                        self.log.append(
-                            (self.current_time, event_type, int(parts[1]), int(parts[2]))
-                        )
+                    self.log.append(
+                        (self.current_time, event_type, int(parts[1]), int(parts[2]))
+                    )
                     return
                 except (TypeError, ValueError):
                     pass
@@ -99,14 +89,16 @@ def _filtered_log_event(
             else event.get("limit_price")
         )
         side = event.get("side")
-        _write_order_row(
-            self,
-            event_type,
-            int(event.get("agent_id", self.id)),
-            getattr(side, "value", side),
-            0 if px is None else int(px),
-            0 if event.get("quantity") is None else int(event["quantity"]),
-            int(oid),
+        self.log.append(
+            (
+                self.current_time,
+                event_type,
+                int(event.get("agent_id", self.id)),
+                getattr(side, "value", side),
+                0 if px is None else int(px),
+                0 if event.get("quantity") is None else int(event["quantity"]),
+                int(oid),
+            )
         )
         return
     self.log.append((self.current_time, event_type, event))
@@ -114,14 +106,6 @@ def _filtered_log_event(
 
 def _noop(*_args: Any, **_kwargs: Any) -> None:
     return None
-
-
-def _write_order_row(agent, etype, aid, side, px, sz, oid) -> None:
-    tr = getattr(getattr(agent, "kernel", None), "_col_trace", None)
-    if tr is not None:
-        tr.add_order(agent.current_time, etype, aid, side, px, sz, oid)
-        return
-    agent.log.append((agent.current_time, etype, aid, side, px, sz, oid))
 
 
 class HeapPQueue:
@@ -150,38 +134,10 @@ class HeapPQueue:
         """Same key as ABIDES / C ``EventQueue``: ``(deliver_at, (sid, rid, message))``."""
         heapq.heappush(self.queue, (deliver_at, (sender_id, recipient_id, message)))
 
-    def push_event(
-        self,
-        deliver_at: Any,
-        sender_id: int,
-        recipient_id: int,
-        message_id: int,
-        kind: int,
-        payload: Any,
-    ) -> None:
-        key = _CompactKey(message_id, kind, payload)
-        heapq.heappush(self.queue, (deliver_at, (sender_id, recipient_id, key)))
-
     def pop(self) -> tuple:
         deliver_at, event = heapq.heappop(self.queue)
-        sender_id, recipient_id, obj = event
-        if type(obj) is _CompactKey:
-            return deliver_at, sender_id, recipient_id, obj.kind, obj.payload, obj.message_id
-        return deliver_at, sender_id, recipient_id, 0, obj, obj.message_id
-
-
-class _CompactKey:
-    """heapq tie-break by ``message_id``, same as ``Message.__lt__``."""
-
-    __slots__ = ("message_id", "kind", "payload")
-
-    def __init__(self, message_id: int, kind: int, payload: Any) -> None:
-        self.message_id = message_id
-        self.kind = kind
-        self.payload = payload
-
-    def __lt__(self, other: Any) -> bool:
-        return self.message_id < other.message_id
+        sender_id, recipient_id, message = event
+        return deliver_at, sender_id, recipient_id, message
 
 
 class _NoAppend(list):
@@ -757,14 +713,16 @@ def _apply_phase5_patches() -> None:
 
     def order_executed(self, order) -> None:
         if self.log_orders:
-            _write_order_row(
-                self,
-                "ORDER_EXECUTED",
-                order.agent_id,
-                "BID" if order.side is _BID else "ASK",
-                0 if order.fill_price is None else order.fill_price,
-                order.quantity,
-                order.order_id,
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_EXECUTED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    0 if order.fill_price is None else order.fill_price,
+                    order.quantity,
+                    order.order_id,
+                )
             )
         qty = order.quantity if order.side is _BID else -order.quantity
         sym = order.symbol
@@ -784,26 +742,30 @@ def _apply_phase5_patches() -> None:
 
     def order_accepted(self, order) -> None:
         if self.log_orders:
-            _write_order_row(
-                self,
-                "ORDER_ACCEPTED",
-                order.agent_id,
-                "BID" if order.side is _BID else "ASK",
-                order.limit_price,
-                order.quantity,
-                order.order_id,
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_ACCEPTED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    order.limit_price,
+                    order.quantity,
+                    order.order_id,
+                )
             )
 
     def order_cancelled(self, order) -> None:
         if self.log_orders:
-            _write_order_row(
-                self,
-                "ORDER_CANCELLED",
-                order.agent_id,
-                "BID" if order.side is _BID else "ASK",
-                order.limit_price,
-                order.quantity,
-                order.order_id,
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_CANCELLED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    order.limit_price,
+                    order.quantity,
+                    order.order_id,
+                )
             )
         if order.order_id in self.orders:
             del self.orders[order.order_id]

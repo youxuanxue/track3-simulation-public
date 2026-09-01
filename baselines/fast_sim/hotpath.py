@@ -42,29 +42,10 @@ class EventQueue:
     def push(self, deliver_at: Any, sender_id: int, recipient_id: int, message: Any) -> None:
         heappush(self._heap, (deliver_at, (sender_id, recipient_id, message)))
 
-    def push_event(
-        self,
-        deliver_at: Any,
-        sender_id: int,
-        recipient_id: int,
-        message_id: int,
-        kind: int,
-        payload: Any,
-    ) -> None:
-        from fast_sim.optimize import _CompactKey
-
-        heappush(
-            self._heap,
-            (deliver_at, (sender_id, recipient_id, _CompactKey(message_id, kind, payload))),
-        )
-
     def pop(self) -> tuple:
         deliver_at, event = heappop(self._heap)
-        sender_id, recipient_id, obj = event
-        kind = getattr(obj, "kind", 0)
-        if kind:
-            return deliver_at, sender_id, recipient_id, kind, obj.payload, obj.message_id
-        return deliver_at, sender_id, recipient_id, 0, obj, obj.message_id
+        sender_id, recipient_id, message = event
+        return deliver_at, sender_id, recipient_id, message
 
     def put(self, item: Any) -> None:
         event = item[1]

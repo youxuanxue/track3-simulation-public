@@ -7,26 +7,12 @@ from cpython.object cimport PyObject
 from cpython.ref cimport Py_DECREF, Py_INCREF, Py_XDECREF
 
 
-# kind 0 = Python Message (agent-originated rare path). Other kinds are
-# compact exchange/kernel hops: payload is an order or a small tuple.
-KIND_PY = 0
-KIND_WAKEUP = 1
-KIND_EXEC = 2
-KIND_ACCEPT = 3
-KIND_CANCEL = 4
-KIND_LIMIT = 5
-KIND_CANCEL_REQ = 6
-KIND_SPREAD_REQ = 7
-KIND_SPREAD_RESP = 8
-KIND_MKT = 9
-
 cdef struct Event:
     long long deliver_at
     int sender_id
     int recipient_id
     long long message_id
-    int kind
-    PyObject *payload
+    PyObject *message
 
 
 cdef inline int _event_less(Event *a, Event *b) noexcept nogil:
@@ -65,7 +51,7 @@ cdef class EventQueue:
         cdef Py_ssize_t i
         if self.buf != NULL:
             for i in range(self.n):
-                Py_XDECREF(self.buf[i].payload)
+                Py_XDECREF(self.buf[i].message)
             free(self.buf)
             self.buf = NULL
 
@@ -123,45 +109,21 @@ cdef class EventQueue:
             self.buf[smallest] = tmp
             i = smallest
 
-    cdef void _push_ev(self, long long deliver_at, int sender_id, int recipient_id, long long message_id, int kind, object payload) except *:
+    cpdef void push(self, object deliver_at, int sender_id, int recipient_id, object message):
         cdef Event ev
         cdef Py_ssize_t i
         if self.n >= self.cap:
             self._grow()
-        ev.deliver_at = deliver_at
+        ev.deliver_at = <long long>deliver_at
         ev.sender_id = sender_id
         ev.recipient_id = recipient_id
-        ev.message_id = message_id
-        ev.kind = kind
-        if payload is not None:
-            Py_INCREF(payload)
-            ev.payload = <PyObject *>payload
-        else:
-            ev.payload = NULL
+        ev.message_id = <long long>message.message_id
+        Py_INCREF(message)
+        ev.message = <PyObject *>message
         i = self.n
         self.buf[i] = ev
         self.n = i + 1
         self._sift_up(i)
-
-    cpdef void push(self, object deliver_at, int sender_id, int recipient_id, object message):
-        self._push_ev(
-            <long long>deliver_at,
-            sender_id,
-            recipient_id,
-            <long long>message.message_id,
-            0,
-            message,
-        )
-
-    cpdef void push_event(self, object deliver_at, int sender_id, int recipient_id, object message_id, int kind, object payload):
-        self._push_ev(
-            <long long>deliver_at,
-            sender_id,
-            recipient_id,
-            <long long>message_id,
-            kind,
-            payload,
-        )
 
     cpdef tuple pop(self):
         if self.n == 0:
@@ -171,26 +133,17 @@ cdef class EventQueue:
         if self.n > 0:
             self.buf[0] = self.buf[self.n]
             self._sift_down(0)
-        cdef object payload = None
-        if top.payload != NULL:
-            payload = <object>top.payload
-            Py_DECREF(payload)
-        return (
-            top.deliver_at,
-            top.sender_id,
-            top.recipient_id,
-            top.kind,
-            payload,
-            top.message_id,
-        )
+        cdef object msg = <object>top.message
+        Py_DECREF(msg)
+        return (top.deliver_at, top.sender_id, top.recipient_id, msg)
 
     def put(self, item):
         event = item[1]
         self.push(item[0], event[0], event[1], event[2])
 
     def get(self):
-        da, sid, rid, kind, payload, mid = self.pop()
-        return (da, (sid, rid, payload))
+        da, sid, rid, msg = self.pop()
+        return (da, (sid, rid, msg))
 
 _APPLIED = False
 _LimitOrder = None
@@ -236,117 +189,6 @@ def make_empty_msg(cls):
 
 def _exch_kernel_send(owner, recipient_id, message):
     owner.kernel.send_message(owner.id, recipient_id, message, delay=owner.pipeline_delay)
-
-
-def _alloc_mid():
-    mid = _Message._Message__message_id_counter
-    _Message._Message__message_id_counter = mid + 1
-    return mid
-
-
-def _ledger_send(kernel, mid, sender_id, recipient_id, sent_time, deliver_at, type_name, order_id):
-    latency_ns = deliver_at - sent_time
-    parent = kernel._current_causal_uid
-    col = getattr(kernel, "_col_ledger", None)
-    if col is not None:
-        idx = col.append(
-            mid, sender_id, recipient_id, sent_time, deliver_at, latency_ns,
-            type_name, order_id, parent, -1,
-        )
-        pending = getattr(kernel, "_pending_ledger", None)
-        if pending is not None:
-            pending[(mid, recipient_id)] = idx
-        return
-    entry = (
-        mid, sender_id, recipient_id, sent_time, deliver_at, latency_ns,
-        type_name, order_id, parent,
-    )
-    kernel._msg_ledger.append(entry)
-    pending = getattr(kernel, "_pending_ledger", None)
-    if pending is not None:
-        pending[(mid, recipient_id)] = entry
-
-
-def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_name, order_id):
-    """Enqueue a compact hop and assign ``message_id`` in ABIDES construction order."""
-    mid = _alloc_mid()
-    sent_time = (
-        kernel.current_time
-        + kernel.agent_computation_delays[sender_id]
-        + kernel.current_agent_additional_delay
-        + delay
-    )
-    latency_model = kernel.agent_latency_model
-    if latency_model is not None:
-        latency = latency_model.get_latency(
-            sender_id=sender_id, recipient_id=recipient_id
-        )
-        deliver_at = sent_time + int(latency)
-    else:
-        latency = kernel.agent_latency[sender_id][recipient_id]
-        noise = kernel.random_state.choice(len(kernel.latency_noise), p=kernel.latency_noise)
-        deliver_at = sent_time + int(latency + noise)
-    kernel.messages.push_event(deliver_at, sender_id, recipient_id, mid, kind, payload)
-    _ledger_send(kernel, mid, sender_id, recipient_id, sent_time, deliver_at, type_name, order_id)
-
-
-def _exch_send_kind(owner, recipient_id, kind, order, type_name):
-    send_compact(
-        owner.kernel, owner.id, recipient_id, kind, order,
-        owner.pipeline_delay, type_name, order.order_id,
-    )
-
-
-def _materialize(kind, payload, mid):
-    if kind == 2:
-        m = _OrderExecutedMsg.__new__(_OrderExecutedMsg)
-        m.order = payload
-        m.message_id = mid
-        return m
-    if kind == 3:
-        m = _OrderAcceptedMsg.__new__(_OrderAcceptedMsg)
-        m.order = payload
-        m.message_id = mid
-        return m
-    if kind == 4:
-        m = _OrderCancelledMsg.__new__(_OrderCancelledMsg)
-        m.order = payload
-        m.message_id = mid
-        return m
-    if kind == 5:
-        m = _LimitOrderMsg.__new__(_LimitOrderMsg)
-        m.order = payload
-        m.message_id = mid
-        return m
-    if kind == 6:
-        m = _CancelOrderMsg.__new__(_CancelOrderMsg)
-        m.order = payload[0]
-        m.tag = payload[1]
-        m.metadata = payload[2]
-        m.message_id = mid
-        return m
-    if kind == 7:
-        m = _QuerySpreadMsg.__new__(_QuerySpreadMsg)
-        m.symbol = payload[0]
-        m.depth = payload[1]
-        m.message_id = mid
-        return m
-    if kind == 8:
-        m = _QuerySpreadResponseMsg.__new__(_QuerySpreadResponseMsg)
-        m.symbol = payload[0]
-        m.depth = payload[1]
-        m.bids = payload[2]
-        m.asks = payload[3]
-        m.last_trade = payload[4]
-        m.mkt_closed = False
-        m.message_id = mid
-        return m
-    if kind == 9:
-        m = _MarketOrderMsg.__new__(_MarketOrderMsg)
-        m.order = payload
-        m.message_id = mid
-        return m
-    return payload
 
 
 def cheap_clone(order):
@@ -649,8 +491,8 @@ def execute_order(self, order):
     order.quantity -= filled_order.quantity
 
     owner = self.owner
-    _exch_send_kind(owner, matched_order.agent_id, 2, matched_order, "OrderExecutedMsg")
-    _exch_send_kind(owner, order.agent_id, 2, filled_order, "OrderExecutedMsg")
+    _exch_kernel_send(owner, matched_order.agent_id, make_order_msg(_OrderExecutedMsg, matched_order))
+    _exch_kernel_send(owner, order.agent_id, make_order_msg(_OrderExecutedMsg, filled_order))
     return matched_order
 
 
@@ -732,9 +574,10 @@ def handle_limit_order(self, order, quiet=False):
                             continue
                         if stp_policy != "cancel_oldest":
                             if not quiet:
-                                _exch_send_kind(
-                                    owner, order.agent_id, 4,
-                                    cheap_clone(order), "OrderCancelledMsg",
+                                _exch_kernel_send(
+                                    owner,
+                                    order.agent_id,
+                                    make_order_msg(_OrderCancelledMsg, cheap_clone(order)),
                                 )
                             break
 
@@ -746,27 +589,19 @@ def handle_limit_order(self, order, quiet=False):
         else:
             self.enter_order(cheap_clone(order), quiet=quiet)
             if not quiet:
-                _exch_send_kind(owner, order.agent_id, 3, order, "OrderAcceptedMsg")
+                _exch_kernel_send(
+                    owner, order.agent_id, make_order_msg(_OrderAcceptedMsg, order)
+                )
             break
 
+    log = owner.log
     now = owner.current_time
-    tr = getattr(getattr(owner, "kernel", None), "_col_trace", None)
-    if tr is not None:
-        eid = owner.id
-        if self.bids:
-            b0 = self.bids[0]
-            tr.add_quote(now, True, b0.price, b0._visible_qty, eid)
-        if self.asks:
-            a0 = self.asks[0]
-            tr.add_quote(now, False, a0.price, a0._visible_qty, eid)
-    else:
-        log = owner.log
-        if self.bids:
-            b0 = self.bids[0]
-            log.append((now, "BEST_BID", b0.price, b0._visible_qty))
-        if self.asks:
-            a0 = self.asks[0]
-            log.append((now, "BEST_ASK", a0.price, a0._visible_qty))
+    if self.bids:
+        b0 = self.bids[0]
+        log.append((now, "BEST_BID", b0.price, b0._visible_qty))
+    if self.asks:
+        a0 = self.asks[0]
+        log.append((now, "BEST_ASK", a0.price, a0._visible_qty))
 
     if executed:
         trade_qty = 0
@@ -803,9 +638,10 @@ def handle_market_order(self, order):
                 if stp_policy == "cancel_oldest" and self.cancel_order(_pl_peek(opp[0])[0]):
                     continue
                 if stp_policy != "cancel_oldest":
-                    _exch_send_kind(
-                        owner, order.agent_id, 4,
-                        cheap_clone(order), "OrderCancelledMsg",
+                    _exch_kernel_send(
+                        owner,
+                        order.agent_id,
+                        make_order_msg(_OrderCancelledMsg, cheap_clone(order)),
                     )
                     break
         if self.execute_order(order) is None:
@@ -843,9 +679,10 @@ def cancel_order(self, order, tag=None, cancellation_metadata=None, quiet=False)
                     metadata=cancellation_metadata if tag == "auctionFill" else None,
                 )
             )
-            _exch_send_kind(
-                self.owner, order.agent_id, 4,
-                cancelled_order, "OrderCancelledMsg",
+            _exch_kernel_send(
+                self.owner,
+                order.agent_id,
+                make_order_msg(_OrderCancelledMsg, cancelled_order),
             )
         self.last_update_ts = self.owner.current_time
         return True
@@ -853,31 +690,6 @@ def cancel_order(self, order, tag=None, cancellation_metadata=None, quiet=False)
 
 
 def send_message(self, sender_id, recipient_id, message, delay=0):
-    t = type(message)
-    kind = 0
-    payload = message
-    type_name = t.__name__
-    order_id = None
-    if t is _OrderExecutedMsg:
-        kind, payload, type_name, order_id = 2, message.order, "OrderExecutedMsg", message.order.order_id
-    elif t is _OrderAcceptedMsg:
-        kind, payload, type_name, order_id = 3, message.order, "OrderAcceptedMsg", message.order.order_id
-    elif t is _OrderCancelledMsg:
-        kind, payload, type_name, order_id = 4, message.order, "OrderCancelledMsg", message.order.order_id
-    elif t is _LimitOrderMsg:
-        kind, payload, type_name, order_id = 5, message.order, "LimitOrderMsg", message.order.order_id
-    elif t is _CancelOrderMsg:
-        kind, payload, type_name = 6, (message.order, message.tag, message.metadata), "CancelOrderMsg"
-        order_id = message.order.order_id
-    elif t is _QuerySpreadMsg:
-        kind, payload, type_name = 7, (message.symbol, message.depth), "QuerySpreadMsg"
-    elif t is _QuerySpreadResponseMsg:
-        kind, payload, type_name = 8, (
-            message.symbol, message.depth, message.bids, message.asks, message.last_trade
-        ), "QuerySpreadResponseMsg"
-    elif t is _MarketOrderMsg:
-        kind, payload, type_name, order_id = 9, message.order, "MarketOrderMsg", message.order.order_id
-
     sent_time = (
         self.current_time
         + self.agent_computation_delays[sender_id]
@@ -895,24 +707,29 @@ def send_message(self, sender_id, recipient_id, message, delay=0):
         noise = self.random_state.choice(len(self.latency_noise), p=self.latency_noise)
         deliver_at = sent_time + int(latency + noise)
 
-    if kind == 0:
-        self.messages.push(deliver_at, sender_id, recipient_id, message)
-        ledger_msgs = message.messages if type(message) is _MessageBatch else (message,)
-        for lm in ledger_msgs:
-            ord_ = getattr(lm, "order", None)
-            _ledger_send(
-                self, lm.message_id, sender_id, recipient_id, sent_time, deliver_at,
-                type(lm).__name__, getattr(ord_, "order_id", None),
-            )
-        return
+    self.messages.push(deliver_at, sender_id, recipient_id, message)
 
-    self.messages.push_event(
-        deliver_at, sender_id, recipient_id, message.message_id, kind, payload
-    )
-    _ledger_send(
-        self, message.message_id, sender_id, recipient_id, sent_time, deliver_at,
-        type_name, order_id,
-    )
+    ledger_msgs = message.messages if type(message) is _MessageBatch else (message,)
+    latency_ns = deliver_at - sent_time
+    parent = self._current_causal_uid
+    ledger = self._msg_ledger
+    pending = getattr(self, "_pending_ledger", None)
+    for lm in ledger_msgs:
+        ord_ = getattr(lm, "order", None)
+        entry = (
+            lm.message_id,
+            sender_id,
+            recipient_id,
+            sent_time,
+            deliver_at,
+            latency_ns,
+            type(lm).__name__,
+            getattr(ord_, "order_id", None),
+            parent,
+        )
+        ledger.append(entry)
+        if pending is not None:
+            pending[(lm.message_id, recipient_id)] = entry
 
 
 def set_wakeup(self, sender_id, requested_time=None):
@@ -926,8 +743,8 @@ def set_wakeup(self, sender_id, requested_time=None):
             "requested_time:",
             requested_time,
         )
-    self.messages.push_event(
-        requested_time, sender_id, sender_id, _alloc_mid(), 1, None
+    self.messages.push(
+        requested_time, sender_id, sender_id, make_empty_msg(_WakeupMsg)
     )
 
 
@@ -946,58 +763,52 @@ def kernel_runner(self, agent_actions=None):
     pending = getattr(self, "_pending_ledger", None)
     delivered = getattr(self, "_delivered", None)
 
-    col = getattr(self, "_col_ledger", None)
     while (
         not messages.empty()
         and self.current_time
         and (self.current_time <= stop_time)
     ):
-        self.current_time, sender_id, recipient_id, kind, payload, mid = messages.pop()
+        self.current_time, sender_id, recipient_id, message = messages.pop()
         self.ttl_messages += 1
         self.current_agent_additional_delay = 0
 
-        if kind == 1:
+        if type(message) is _WakeupMsg:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                messages.push_event(busy_until, sender_id, recipient_id, mid, 1, None)
+                messages.push(busy_until, sender_id, recipient_id, message)
                 continue
             agent_times[recipient_id] = self.current_time
-            self._current_causal_uid = mid
+            self._current_causal_uid = message.message_id
             seq = self._deliver_seq
-            seq_by_key[(mid, recipient_id)] = seq
+            seq_by_key[(message.message_id, recipient_id)] = seq
             self._deliver_seq = seq + 1
-            if col is not None:
-                col.append(
-                    mid, recipient_id, recipient_id, None, self.current_time, 0,
-                    "AGENT_WAKEUP", None, None, seq,
-                )
-            else:
-                entry = (
-                    mid, recipient_id, recipient_id, None, self.current_time, 0,
-                    "AGENT_WAKEUP", None, None, seq,
-                )
-                ledger.append(entry)
-                if delivered is not None:
-                    delivered.append(entry)
+            entry = (
+                message.message_id,
+                recipient_id,
+                recipient_id,
+                None,
+                self.current_time,
+                0,
+                "AGENT_WAKEUP",
+                None,
+                None,
+                seq,
+            )
+            ledger.append(entry)
+            if delivered is not None:
+                delivered.append(entry)
             wakeup_result = agents[recipient_id].wakeup(self.current_time)
             agent_times[recipient_id] += (
                 delays[recipient_id] + self.current_agent_additional_delay
             )
             if wakeup_result is not None:
                 return {"done": False, "result": wakeup_result}
-            continue
-
-        busy_until = agent_times[recipient_id]
-        if busy_until > self.current_time:
-            if kind == 0:
-                messages.push(busy_until, sender_id, recipient_id, payload)
-            else:
-                messages.push_event(busy_until, sender_id, recipient_id, mid, kind, payload)
-            continue
-        agent_times[recipient_id] = self.current_time
-
-        if kind == 0:
-            message = payload
+        else:
+            busy_until = agent_times[recipient_id]
+            if busy_until > self.current_time:
+                messages.push(busy_until, sender_id, recipient_id, message)
+                continue
+            agent_times[recipient_id] = self.current_time
             batch = message.messages if type(message) is _MessageBatch else (message,)
             for sub in batch:
                 agent_times[recipient_id] += (
@@ -1009,46 +820,24 @@ def kernel_runner(self, agent_actions=None):
                 self._deliver_seq = seq + 1
                 if pending is not None:
                     entry = pending.pop((sub.message_id, recipient_id), None)
-                    if col is not None and entry is not None:
-                        col.set_seq(entry, seq)
-                    elif entry is not None and delivered is not None:
+                    if entry is not None and delivered is not None:
                         delivered.append(
                             (
-                                entry[0], entry[1], entry[2], entry[3], entry[4],
-                                entry[5], entry[6], entry[7], entry[8], seq,
+                                entry[0],
+                                entry[1],
+                                entry[2],
+                                entry[3],
+                                entry[4],
+                                entry[5],
+                                entry[6],
+                                entry[7],
+                                entry[8],
+                                seq,
                             )
                         )
                 agents[recipient_id].receive_message(
                     self.current_time, sender_id, sub
                 )
-            continue
-
-        agent_times[recipient_id] += (
-            delays[recipient_id] + self.current_agent_additional_delay
-        )
-        self._current_causal_uid = mid
-        seq = self._deliver_seq
-        seq_by_key[(mid, recipient_id)] = seq
-        self._deliver_seq = seq + 1
-        if pending is not None:
-            entry = pending.pop((mid, recipient_id), None)
-            if col is not None and entry is not None:
-                col.set_seq(entry, seq)
-            elif entry is not None and delivered is not None:
-                delivered.append(
-                    (
-                        entry[0], entry[1], entry[2], entry[3], entry[4],
-                        entry[5], entry[6], entry[7], entry[8], seq,
-                    )
-                )
-        if kind == 5 or kind == 6 or kind == 7 or kind == 9:
-            exch_receive_compact(
-                agents[recipient_id], self.current_time, sender_id, kind, payload, mid
-            )
-        else:
-            agents[recipient_id].receive_message(
-                self.current_time, sender_id, _materialize(kind, payload, mid)
-            )
 
     if self.gym_agents:
         self.gym_agents[0].update_raw_state()
@@ -1146,52 +935,6 @@ def exch_receive_message(self, current_time, sender_id, message):
     return _py_exch_recv_fallback(self, current_time, sender_id, message)
 
 
-def exch_receive_compact(self, current_time, sender_id, kind, payload, mid):
-    if current_time > self.mkt_close:
-        return _py_exch_recv_fallback(
-            self, current_time, sender_id, _materialize(kind, payload, mid)
-        )
-    self.current_time = current_time
-    self.kernel.agent_computation_delays[self.id] = self.computation_delay
-    if kind == 5:
-        book = self.order_books.get(payload.symbol)
-        if book is not None:
-            book.handle_limit_order(cheap_clone(payload))
-            if self.data_subscriptions:
-                self.publish_order_book_data()
-        return
-    if kind == 7:
-        symbol, depth = payload
-        book = self.order_books.get(symbol)
-        if book is not None:
-            send_compact(
-                self.kernel,
-                self.id,
-                sender_id,
-                8,
-                (symbol, depth, _l2(book.bids, depth), _l2(book.asks, depth), book.last_trade),
-                0,
-                "QuerySpreadResponseMsg",
-                None,
-            )
-        return
-    if kind == 6:
-        order, tag, metadata = payload
-        book = self.order_books.get(order.symbol)
-        if book is not None:
-            book.cancel_order(cheap_clone(order), tag, metadata)
-            if self.data_subscriptions:
-                self.publish_order_book_data()
-        return
-    if kind == 9:
-        book = self.order_books.get(payload.symbol)
-        if book is not None:
-            book.handle_market_order(cheap_clone(payload))
-            if self.data_subscriptions:
-                self.publish_order_book_data()
-        return
-
-
 def sched_wakeup(self, current_time):
     self.current_time = current_time
     if self.first_wake:
@@ -1213,9 +956,8 @@ def sched_wakeup(self, current_time):
     if not self.mkt_close or self.mkt_closed:
         return
     self.kernel.set_wakeup(self.id, current_time + self.interval_ns)
-    send_compact(
-        self.kernel, self.id, self.exchange_id, 7, (self.symbol, 1),
-        0, "QuerySpreadMsg", None,
+    self.kernel.send_message(
+        self.id, self.exchange_id, make_query_spread(self.symbol, 1), delay=0
     )
     self.state = "AWAITING_SPREAD"
 
@@ -1271,13 +1013,12 @@ def place_limit_order(
         order.insert_by_id = insert_by_id
         order.is_post_only = is_post_only
     self.orders[order.order_id] = cheap_clone(order)
-    send_compact(
-        self.kernel, self.id, self.exchange_id, 5, order, 0, "LimitOrderMsg", order.order_id
+    self.kernel.send_message(
+        self.id, self.exchange_id, make_order_msg(_LimitOrderMsg, order), delay=0
     )
     if self.log_orders:
-        tr = getattr(self.kernel, "_col_trace", None)
-        if tr is not None:
-            tr.add_order(
+        self.log.append(
+            (
                 self.current_time,
                 "ORDER_SUBMITTED",
                 order.agent_id,
@@ -1286,18 +1027,7 @@ def place_limit_order(
                 order.quantity,
                 order.order_id,
             )
-        else:
-            self.log.append(
-                (
-                    self.current_time,
-                    "ORDER_SUBMITTED",
-                    order.agent_id,
-                    "BID" if side is _BID else "ASK",
-                    order.limit_price,
-                    order.quantity,
-                    order.order_id,
-                )
-            )
+        )
 
 
 def noise_act(self):

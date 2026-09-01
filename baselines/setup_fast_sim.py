@@ -17,7 +17,12 @@ setup(
                 "fast_sim._hotpath",
                 ["fast_sim/_hotpath.pyx"],
                 extra_compile_args=["-O3"],
-            )
+            ),
+            Extension(
+                "fast_sim._native",
+                ["fast_sim/_native.pyx"],
+                extra_compile_args=["-O3"],
+            ),
         ],
         language_level="3",
         compiler_directives={

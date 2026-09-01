@@ -2,7 +2,7 @@
 """Compiled OrderBook + Kernel hot path. Semantics match ``hotpath.py``."""
 
 from copy import deepcopy as _real_deepcopy
-from libc.math cimport log, sqrt
+from libc.math cimport exp, log, sqrt
 from libc.stdint cimport uint32_t
 from libc.stdlib cimport free, malloc, realloc
 from cpython.object cimport PyObject
@@ -109,6 +109,10 @@ cdef class MT19937:
     cdef inline double normal(self, double loc, double scale) noexcept nogil:
         return loc + scale * self.gauss_polar()
 
+    cdef inline double lognormal(self, double mean, double sigma) noexcept nogil:
+        # numpy.random.RandomState.lognormal == exp(normal(mean, sigma))
+        return exp(self.normal(mean, sigma))
+
     cdef inline long randint(self, long low, long high) noexcept nogil:
         cdef uint32_t rng, mask, val
         rng = <uint32_t>(high - low - 1)
@@ -127,6 +131,9 @@ cdef class MT19937:
 
     def py_normal(self, loc, scale):
         return self.normal(loc, scale)
+
+    def py_lognormal(self, mean, sigma):
+        return self.lognormal(mean, sigma)
 
     def py_randint(self, low, high):
         return self.randint(low, high)
@@ -508,7 +515,7 @@ def get_latency(self, sender_id, recipient_id):
         return 0
     model = self._model
     if model == "log_normal":
-        value = self.random_state.lognormal(mean=self._mu, sigma=self._sigma)
+        value = _agent_mt(self).lognormal(self._mu, self._sigma)
     elif model == "uniform":
         value = self.random_state.uniform(self._min_ns, self._max_ns)
     elif model == "pareto":
@@ -1506,11 +1513,17 @@ def value_act(self):
         mid = float(ask)
     else:
         return
-    fundamental = int(
-        self.oracle.observe_price(
-            symbol, self.current_time, self.random_state, sigma_n=self.sigma_n
-        )
+    # Lookup only (sigma_n=0 draws nothing). Noise is C MT19937, same
+    # int(round(normal(r_t, sqrt(sigma_n)))) as oracle.observe_price.
+    r_t = self.oracle.observe_price(
+        symbol, self.current_time, self.random_state, sigma_n=0
     )
+    if self.sigma_n:
+        fundamental = int(
+            round(_agent_mt(self).normal(r_t, sqrt(self.sigma_n)))
+        )
+    else:
+        fundamental = int(r_t)
     size = int(max(1, round(self.order_size_mean)))
     if mid < fundamental - self.threshold_ticks and ask:
         place_limit_order(self, symbol, size, _BID, int(ask))
@@ -1678,18 +1691,33 @@ def apply_book_patches():
 
 
 def mt19937_matches_numpy(seeds=20, draws=50):
-    """True iff C MT19937 lock-steps ``RandomState.normal`` / ``randint``."""
+    """True iff C MT19937 lock-steps numpy 1.26 RandomState draw sequences.
+
+    Covers NoiseTrader (normal + randint), latency lognormal, and
+    ValueTrader observe_price (int(round(normal(r_t, sqrt(sigma_n))))).
+    """
     import numpy as np
 
     for seed in range(seeds):
         rs = np.random.RandomState(seed)
         mt = MT19937()
         mt.bind_numpy(rs)
-        for _ in range(draws):
+        for i in range(draws):
             if mt.normal(10.0, 2.0) != float(rs.normal(10.0, 2.0)):
                 return False
             if mt.randint(0, 2) != int(rs.randint(0, 2)):
                 return False
             if mt.randint(0, 6) != int(rs.randint(0, 6)):
+                return False
+            mu = 6.5 + (seed % 5) * 0.1
+            sigma = 0.15 + (i % 7) * 0.01
+            if mt.lognormal(mu, sigma) != float(rs.lognormal(mean=mu, sigma=sigma)):
+                return False
+            r_t = 100000.0 + 10 * i
+            sn = 1000.0 + 50 * (i % 3)
+            scale = sqrt(sn)
+            if int(round(mt.normal(r_t, scale))) != int(
+                round(rs.normal(loc=r_t, scale=scale))
+            ):
                 return False
     return True

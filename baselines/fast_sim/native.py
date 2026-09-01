@@ -11,8 +11,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# Wired as default only after s001 120/84/74/0/604/664 matches.
-NATIVE_IS_DEFAULT = False
+# Wired as default after s001 120/84/74/0/604/664 matched bit-exact.
+NATIVE_IS_DEFAULT = True
 
 _SUPPORTED = {"ExchangeAgent", "NoiseTrader", "MarketMaker", "ValueTrader", "MomentumTrader"}
 

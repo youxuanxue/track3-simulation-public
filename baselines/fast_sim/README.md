@@ -19,7 +19,9 @@ with a bit-exact C `MT19937` and NoiseTrader draws. Step 7 ports
 latency lognormal and ValueTrader `observe_price` onto that stream.
 Step 8 dispatches wakeup / act / exchange inside Cython and keeps
 `LimitOrder` off the hop (field tuples). Step 9 puts a C `COrder`
-in the book and writes trace / ledger from C arrays. No GPU.
+in the book and writes trace / ledger from C arrays. Step 10
+makes the hop a C `Event` and keeps agent working orders in a C
+map. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -364,7 +366,7 @@ Repeats: as06 199.4k–222.4k, gb_mega 136.0k–168.1k. Official B200
 worker will differ. Incremental C dispatch is exact and a few
 percent faster; it is not 10×.
 
-## Championship step 9 (this change)
+## Championship step 9
 
 C book + C ledger. `enter_order` / `execute_order` / `handle_limit`
 store a compact `COrder` struct — no Python `LimitOrder` on the
@@ -386,12 +388,35 @@ gb_mega, MP (`mp01`) and RA (`ra01`) exact.
 Repeats: as06 227.0k–241.8k, gb_mega 200.8k–206.4k. Official B200
 worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
 
+## Championship step 10 (this change)
+
+C Event hops + C agent order map. The hop payload is a C `Event`
+with an embedded `COrder` and L2-1 fields — not a Python Event
+plus tuple. Trading-agent working orders live in a `COrderMap`
+keyed by `order_id`, not Python `LimitOrder`. Fill / accept /
+cancel snapshots stay C tuples (partial-fill semantics). Pandas
+only at the final parquet dump. `COrderMap.remove` keeps insertion
+order so MarketMaker `cancel_all` matches Python `dict` sequence.
+After-close rules stay Step 5. Step 7 C RNG stays. No GPU.
+
+`mt19937_matches_numpy()` still True. **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 9 best | Step 10 best | vs Step 9 |
+|---|---|---|---|
+| `as06_throughput_fast` | 241,776 | **263,427** | **1.09×** |
+| `gb_mega_throughput` | 206,425 | **229,848** | **1.11×** |
+
+Repeats: as06 239.9k–263.4k, gb_mega 208.4k–229.8k. Official B200
+worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
+
 ## Remaining 10× path
 
-~242k / ~206k → ~1.4M / ~1.0M is still ~5–6×. The book is C
-orders and the ledger is C arrays, but the kernel hop is still a
-Python `Event` with a tuple payload, agents still hold Python
-`LimitOrder` in `self.orders`, and extract still builds a pandas
-frame for parquet. A fully C event loop (no tuple hops, no pandas)
-is the leftover cut. After-close stays Step 5. GPU only for
-independent `simulate-batch`.
+~263k / ~230k → ~1.4M / ~1.0M is still ~5–6×. The named Step 9
+walls (Python Event+tuple hops, Python `LimitOrder` in
+`self.orders`) are cut. What is left is the hybrid itself: Python
+agent objects, the ABIDES Kernel shell, and pandas at parquet
+dump. A from-scratch C simulator is the leftover 10× path.
+After-close stays Step 5. GPU only for independent
+`simulate-batch`.

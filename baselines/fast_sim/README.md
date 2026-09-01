@@ -47,11 +47,27 @@ Official ranking is host-measured parquet-row-count / wall clock. These
 numbers are directional. Traces were compared to the shipped unit references
 (exact fill sequence, exact event coverage, exact timestamps).
 
-| Scenario | Family | Shipped `events_per_sec` | fast_sim | Result |
-|---|---|---|---|---|
-| `s001_price_time_priority` | 1 | 3,471 | 17,062 | exact match |
-| all 14 public Family 1 units | 1 | — | 32k–38k typical | **14/14 exact** |
-| `as06_throughput_fast` | AS / F6-like | 14,183 | **19,746** | exact match, **1.39×** shipped unit |
+**65/65 public single-scenario units exact. 6/6 public batch units exact
+(30/30 isolated subs).** Official `run_regression.py` was not run here
+(no Docker daemon in this environment).
+
+| Family | Public units | Result |
+|---|---|---|
+| 1 matching-engine-semantics | 14 | 14/14 exact |
+| 2 / AS agent-mix + ST | 10 | 10/10 exact |
+| 3 latency-profile (EQ + s019) | 9 | 9/9 exact |
+| 4 / CA + SF calibration | 12 | 12/10+7 exact |
+| 6 throughput-scale (`gb_*`) | 6 | 6/6 exact |
+| 7 exchange-protocol (MP) | 7 | 7/7 exact |
+| 8 reactive-agent (RA) | 6 | 6/6 exact |
+| GB `t3-gbatch-*` | 6 batch (30 subs) | 30/30 exact |
+
+| Scenario | Shipped `events_per_sec` | fast_sim | Speedup |
+|---|---|---|---|
+| `s001_price_time_priority` | 3,471 | 17,062 | 4.9× (tiny; startup-heavy) |
+| `as06_throughput_fast` | 14,183 | **19,746** | **1.39×** |
+| `gb_mega_throughput` | 10,571 | **22,421** | **2.12×** |
+| `t3-gbatch-homog-8` (aggregate) | — | 61,779 | parallel batch |
 
 `events_per_sec` is `n_events / wall_clock_sec` of the simulation loop
 (same convention as the adapter). Consistency is exact, well inside ±5%.

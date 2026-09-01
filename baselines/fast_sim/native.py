@@ -183,13 +183,16 @@ def as_pandas(obj: Any) -> Any:
         pa = None
         pd = None
     if pa is not None and isinstance(obj, pa.Table):
-        return obj.to_pandas(
-            types_mapper={
-                pa.int64(): pd.Int64Dtype(),
-                pa.int32(): pd.Int32Dtype(),
-                pa.string(): pd.StringDtype(),
-            }
-        )
+        def _mapper(typ):
+            if pa.types.is_int64(typ):
+                return pd.Int64Dtype()
+            if pa.types.is_int32(typ):
+                return pd.Int32Dtype()
+            if pa.types.is_string(typ) or pa.types.is_large_string(typ):
+                return pd.StringDtype()
+            return None
+
+        return obj.to_pandas(types_mapper=_mapper)
     to_pd = getattr(obj, "to_pandas", None)
     if callable(to_pd) and not hasattr(obj, "iloc"):
         return to_pd()

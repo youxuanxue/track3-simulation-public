@@ -130,6 +130,15 @@ class HeapPQueue:
     def empty(self) -> bool:
         return not self.queue
 
+    def push(self, deliver_at: Any, sender_id: int, recipient_id: int, message: Any) -> None:
+        """Same key as ABIDES / C ``EventQueue``: ``(deliver_at, (sid, rid, message))``."""
+        heapq.heappush(self.queue, (deliver_at, (sender_id, recipient_id, message)))
+
+    def pop(self) -> tuple:
+        deliver_at, event = heapq.heappop(self.queue)
+        sender_id, recipient_id, message = event
+        return deliver_at, sender_id, recipient_id, message
+
 
 class _NoAppend(list):
     """List that ignores ``append`` (order-stream history / unused txn journals)."""

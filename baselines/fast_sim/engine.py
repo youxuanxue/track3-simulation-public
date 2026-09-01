@@ -14,6 +14,14 @@ from abides_fork.config import build_config
 from fast_sim.extract import extract_message_trace_from_state, extract_trace_from_agents
 from fast_sim.optimize import HeapPQueue, apply_runtime_patches, slim_agents, slim_exchange
 
+try:
+    from fast_sim._hotpath import EventQueue
+except ImportError:
+    try:
+        from fast_sim.hotpath import EventQueue
+    except ImportError:
+        EventQueue = HeapPQueue
+
 
 def reset_abides_counters() -> None:
     """Reset ABIDES class-level id counters so a run is deterministic in-process."""
@@ -25,8 +33,10 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     """Execute ``scenario`` and return ``(trace_df, message_trace_df, end_state)``.
 
     The kernel, matching engine, agents, oracle and latency model are the pinned
-    ABIDES stack. The event queue is an unlocked heapq with the same comparison
-    key ABIDES uses, so delivery order is unchanged.
+    ABIDES stack. The event queue is a compact C min-heap (Python heapq fallback)
+    with the same comparison key ABIDES uses:
+    ``(deliver_at, (sender_id, recipient_id, message))`` / ``Message.__lt__``
+    by ``message_id``. Delivery order is unchanged.
     """
     apply_runtime_patches()
     reset_abides_counters()
@@ -55,7 +65,7 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
             ],
         ),
     )
-    kernel.messages = HeapPQueue()
+    kernel.messages = EventQueue()
     kernel.show_trace_messages = False
     # Populated at deliver time so extract can skip the ledger×seq join+sort.
     kernel._delivered = []

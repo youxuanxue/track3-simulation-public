@@ -128,3 +128,19 @@ arithmetic changes.
 while leftover agents still see Python objects; (2) compile Noise / MM /
 Value / Momentum with bit-exact RNG; (3) zero-copy columnar ledger;
 (4) GPU only for batch-of-scenarios.
+
+## Championship step 1 (this change)
+
+C `EventQueue` min-heap in `fast_sim._hotpath` (Python `heapq` twin in
+`hotpath.py`). Each event is `(deliver_at, sid, rid, message_id)` plus a
+borrowed `Message` pointer — the same key as
+`(deliver_at, (sid, rid, message))` with `Message.__lt__` by
+`message_id`. `Kernel.send_message` / `set_wakeup` / `runner` push and
+pop that heap; leftover agents still receive Python `Message` /
+`LimitOrder` objects. `message_id` / `order_id` assignment, numpy
+`RandomState` draws, `pipeline_delay`, STP, and the partial-fill
+snapshot are unchanged. GPU is unused.
+
+Family 1 14/14 + as06 + one MP + one RA must stay exact before this is
+called progress. Throughput vs Phase 5 (~120k / ~78k) is measured after
+that gate.

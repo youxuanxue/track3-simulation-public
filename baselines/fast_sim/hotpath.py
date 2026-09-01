@@ -16,6 +16,45 @@ from copy import deepcopy as _real_deepcopy
 from heapq import heappop, heappush
 from typing import Any, Optional
 
+
+class EventQueue:
+    """Python heapq twin of the C ``EventQueue``. Same ABIDES key."""
+
+    __slots__ = ("_heap",)
+
+    def __init__(self) -> None:
+        self._heap: list = []
+
+    def __len__(self) -> int:
+        return len(self._heap)
+
+    def empty(self) -> bool:
+        return not self._heap
+
+    def __bool__(self) -> bool:
+        return bool(self._heap)
+
+    @property
+    def queue(self) -> "EventQueue":
+        # Kernel.run formats len(self.messages.queue) before runner starts.
+        return self
+
+    def push(self, deliver_at: Any, sender_id: int, recipient_id: int, message: Any) -> None:
+        heappush(self._heap, (deliver_at, (sender_id, recipient_id, message)))
+
+    def pop(self) -> tuple:
+        deliver_at, event = heappop(self._heap)
+        sender_id, recipient_id, message = event
+        return deliver_at, sender_id, recipient_id, message
+
+    def put(self, item: Any) -> None:
+        event = item[1]
+        self.push(item[0], event[0], event[1], event[2])
+
+    def get(self) -> Any:
+        da, sid, rid, msg = self.pop()
+        return (da, (sid, rid, msg))
+
 _APPLIED = False
 _LimitOrder = None
 _MarketOrder = None
@@ -348,7 +387,7 @@ def send_message(
         noise = self.random_state.choice(len(self.latency_noise), p=self.latency_noise)
         deliver_at = sent_time + int(latency + noise)
 
-    heappush(self.messages.queue, (deliver_at, (sender_id, recipient_id, message)))
+    self.messages.push(deliver_at, sender_id, recipient_id, message)
 
     ledger_msgs = message.messages if type(message) is MessageBatch else (message,)
     latency_ns = deliver_at - sent_time
@@ -386,9 +425,8 @@ def set_wakeup(self, sender_id: int, requested_time: Any = None) -> None:
             "requested_time:",
             requested_time,
         )
-    heappush(
-        self.messages.queue,
-        (requested_time, (sender_id, sender_id, make_empty_msg(WakeupMsg))),
+    self.messages.push(
+        requested_time, sender_id, sender_id, make_empty_msg(WakeupMsg)
     )
 
 
@@ -400,7 +438,7 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
         exp_agent, action_list = agent_actions
         exp_agent.apply_actions(action_list)
 
-    q = self.messages.queue
+    messages = self.messages
     agent_times = self.agent_current_times
     agents = self.agents
     delays = self.agent_computation_delays
@@ -408,16 +446,19 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
     pending = getattr(self, "_pending_ledger", None)
     delivered = getattr(self, "_delivered", None)
 
-    while q and self.current_time and (self.current_time <= stop_time):
-        self.current_time, event = heappop(q)
-        sender_id, recipient_id, message = event
+    while (
+        not messages.empty()
+        and self.current_time
+        and (self.current_time <= stop_time)
+    ):
+        self.current_time, sender_id, recipient_id, message = messages.pop()
         self.ttl_messages += 1
         self.current_agent_additional_delay = 0
 
         if type(message) is WakeupMsg:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                heappush(q, (busy_until, (sender_id, recipient_id, message)))
+                messages.push(busy_until, sender_id, recipient_id, message)
                 continue
             agent_times[recipient_id] = self.current_time
             self._current_causal_uid = message.message_id
@@ -448,7 +489,7 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
         else:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                heappush(q, (busy_until, (sender_id, recipient_id, message)))
+                messages.push(busy_until, sender_id, recipient_id, message)
                 continue
             agent_times[recipient_id] = self.current_time
             batch = message.messages if type(message) is MessageBatch else (message,)

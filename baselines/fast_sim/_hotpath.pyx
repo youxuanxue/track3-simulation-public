@@ -2,7 +2,148 @@
 """Compiled OrderBook + Kernel hot path. Semantics match ``hotpath.py``."""
 
 from copy import deepcopy as _real_deepcopy
-from heapq import heappop, heappush
+from libc.stdlib cimport free, malloc, realloc
+from cpython.object cimport PyObject
+from cpython.ref cimport Py_DECREF, Py_INCREF, Py_XDECREF
+
+
+cdef struct Event:
+    long long deliver_at
+    int sender_id
+    int recipient_id
+    long long message_id
+    PyObject *message
+
+
+cdef inline int _event_less(Event *a, Event *b) noexcept nogil:
+    # Same order as (deliver_at, (sid, rid, message)) with Message.__lt__
+    # by message_id. Do not collapse this to (deliver_at, message_id).
+    if a.deliver_at < b.deliver_at:
+        return 1
+    if a.deliver_at > b.deliver_at:
+        return 0
+    if a.sender_id < b.sender_id:
+        return 1
+    if a.sender_id > b.sender_id:
+        return 0
+    if a.recipient_id < b.recipient_id:
+        return 1
+    if a.recipient_id > b.recipient_id:
+        return 0
+    return a.message_id < b.message_id
+
+
+cdef class EventQueue:
+    """C min-heap of kernel events. Comparison matches ABIDES heapq tuples."""
+
+    cdef Event *buf
+    cdef Py_ssize_t n
+    cdef Py_ssize_t cap
+
+    def __cinit__(self):
+        self.n = 0
+        self.cap = 64
+        self.buf = <Event *>malloc(self.cap * sizeof(Event))
+        if self.buf == NULL:
+            raise MemoryError()
+
+    def __dealloc__(self):
+        cdef Py_ssize_t i
+        if self.buf != NULL:
+            for i in range(self.n):
+                Py_XDECREF(self.buf[i].message)
+            free(self.buf)
+            self.buf = NULL
+
+    def __len__(self):
+        return self.n
+
+    def empty(self):
+        return self.n == 0
+
+    def __bool__(self):
+        return self.n != 0
+
+    @property
+    def queue(self):
+        # Kernel.run formats len(self.messages.queue) before runner starts.
+        return self
+
+    cdef int _grow(self) except -1:
+        cdef Py_ssize_t newcap = self.cap * 2
+        cdef Event *nb = <Event *>realloc(self.buf, newcap * sizeof(Event))
+        if nb == NULL:
+            raise MemoryError()
+        self.buf = nb
+        self.cap = newcap
+        return 0
+
+    cdef void _sift_up(self, Py_ssize_t i) noexcept nogil:
+        cdef Py_ssize_t p
+        cdef Event tmp
+        while i > 0:
+            p = (i - 1) >> 1
+            if not _event_less(&self.buf[i], &self.buf[p]):
+                break
+            tmp = self.buf[p]
+            self.buf[p] = self.buf[i]
+            self.buf[i] = tmp
+            i = p
+
+    cdef void _sift_down(self, Py_ssize_t i) noexcept nogil:
+        cdef Py_ssize_t l, r, smallest, n
+        cdef Event tmp
+        n = self.n
+        while True:
+            l = (i << 1) + 1
+            r = l + 1
+            smallest = i
+            if l < n and _event_less(&self.buf[l], &self.buf[smallest]):
+                smallest = l
+            if r < n and _event_less(&self.buf[r], &self.buf[smallest]):
+                smallest = r
+            if smallest == i:
+                break
+            tmp = self.buf[i]
+            self.buf[i] = self.buf[smallest]
+            self.buf[smallest] = tmp
+            i = smallest
+
+    cpdef void push(self, object deliver_at, int sender_id, int recipient_id, object message):
+        cdef Event ev
+        cdef Py_ssize_t i
+        if self.n >= self.cap:
+            self._grow()
+        ev.deliver_at = <long long>deliver_at
+        ev.sender_id = sender_id
+        ev.recipient_id = recipient_id
+        ev.message_id = <long long>message.message_id
+        Py_INCREF(message)
+        ev.message = <PyObject *>message
+        i = self.n
+        self.buf[i] = ev
+        self.n = i + 1
+        self._sift_up(i)
+
+    cpdef tuple pop(self):
+        if self.n == 0:
+            raise IndexError("pop from empty EventQueue")
+        cdef Event top = self.buf[0]
+        self.n -= 1
+        if self.n > 0:
+            self.buf[0] = self.buf[self.n]
+            self._sift_down(0)
+        cdef object msg = <object>top.message
+        Py_DECREF(msg)
+        return (top.deliver_at, top.sender_id, top.recipient_id, msg)
+
+    def put(self, item):
+        event = item[1]
+        self.push(item[0], event[0], event[1], event[2])
+
+    def get(self):
+        da, sid, rid, msg = self.pop()
+        return (da, (sid, rid, msg))
 
 _APPLIED = False
 _LimitOrder = None
@@ -315,7 +456,7 @@ def send_message(self, sender_id, recipient_id, message, delay=0):
         noise = self.random_state.choice(len(self.latency_noise), p=self.latency_noise)
         deliver_at = sent_time + int(latency + noise)
 
-    heappush(self.messages.queue, (deliver_at, (sender_id, recipient_id, message)))
+    self.messages.push(deliver_at, sender_id, recipient_id, message)
 
     ledger_msgs = message.messages if type(message) is _MessageBatch else (message,)
     latency_ns = deliver_at - sent_time
@@ -351,9 +492,8 @@ def set_wakeup(self, sender_id, requested_time=None):
             "requested_time:",
             requested_time,
         )
-    heappush(
-        self.messages.queue,
-        (requested_time, (sender_id, sender_id, make_empty_msg(_WakeupMsg))),
+    self.messages.push(
+        requested_time, sender_id, sender_id, make_empty_msg(_WakeupMsg)
     )
 
 
@@ -362,7 +502,7 @@ def kernel_runner(self, agent_actions=None):
         exp_agent, action_list = agent_actions
         exp_agent.apply_actions(action_list)
 
-    q = self.messages.queue
+    messages = self.messages
     agent_times = self.agent_current_times
     agents = self.agents
     delays = self.agent_computation_delays
@@ -372,16 +512,19 @@ def kernel_runner(self, agent_actions=None):
     pending = getattr(self, "_pending_ledger", None)
     delivered = getattr(self, "_delivered", None)
 
-    while q and self.current_time and (self.current_time <= stop_time):
-        self.current_time, event = heappop(q)
-        sender_id, recipient_id, message = event
+    while (
+        not messages.empty()
+        and self.current_time
+        and (self.current_time <= stop_time)
+    ):
+        self.current_time, sender_id, recipient_id, message = messages.pop()
         self.ttl_messages += 1
         self.current_agent_additional_delay = 0
 
         if type(message) is _WakeupMsg:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                heappush(q, (busy_until, (sender_id, recipient_id, message)))
+                messages.push(busy_until, sender_id, recipient_id, message)
                 continue
             agent_times[recipient_id] = self.current_time
             self._current_causal_uid = message.message_id
@@ -412,7 +555,7 @@ def kernel_runner(self, agent_actions=None):
         else:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                heappush(q, (busy_until, (sender_id, recipient_id, message)))
+                messages.push(busy_until, sender_id, recipient_id, message)
                 continue
             agent_times[recipient_id] = self.current_time
             batch = message.messages if type(message) is _MessageBatch else (message,)

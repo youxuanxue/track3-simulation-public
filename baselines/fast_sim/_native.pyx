@@ -50,8 +50,8 @@ cdef enum:
     ST_WAKE = 0
     ST_SPREAD = 1
     ORC_MAX_JUMPS = 4
-    # Flipped after observe_sequence matches Python on stp_cancel_newest + ra01.
-    NATIVE_OBSERVE = 0
+    # Flipped after observe_sequence matched Python on stp_cancel_newest + ra01.
+    NATIVE_OBSERVE = 1
 
 
 cdef tuple _MT_NAMES = (

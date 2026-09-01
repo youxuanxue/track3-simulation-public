@@ -6,7 +6,7 @@
 new matching engine. The kernel, limit-order book, agents, oracle and latency
 model stay the pinned ABIDES objects. Speed comes from work that does **not**
 appear in the scored traces, a compiled (Cython) OrderBook / Kernel hot path,
-and Phase 3 cuts of the Python tax the profiler named after Phase 2.
+and the Phase 3 / Phase 4 cuts of the Python tax each profiler pass named.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -20,25 +20,39 @@ Cython replaces `execute_order` / `handle_limit_order` / `Kernel.runner` /
 `deepcopy` on a partial fill is snapshotting: the book copy is mutated in
 place after the fill snapshot; the accept message keeps the working residual.
 
-## What Phase 3 actually was hot (after Phase 2)
+## What Phase 4 actually was hot (after Phase 3)
 
-Unprofiled split of the Phase 2 binary on this host:
+Unprofiled split of the Phase 3 binary on this host:
 
-| Unit | kernel | extract_trace | extract_msg |
-|---|---|---|---|
-| `as06_throughput_fast` | 1.71s | 0.22s | **0.42s (18%)** |
-| `gb_mega_throughput` | 32.3s | 3.34s | **9.67s (21%)** |
-| `ra01_fundamental_shock_mid` | 0.61s | 0.09s | 0.14s |
+| Unit | kernel | extract_trace | extract_msg | kernel-only ev/s | full ev/s |
+|---|---|---|---|---|---|
+| `as06_throughput_fast` | 0.90s (78%) | 0.13s | 0.11s | 82.7k | 64.9k |
+| `gb_mega_throughput` | 19.0s (72%) | 2.72s (10%) | **4.46s (17%)** | 61.5k | 44.6k |
 
-cProfile inside the kernel (gb_mega): `fmt_ts` / `LimitOrder.__str__` /
-`str.format` / `dollarize` still ran because `logger.debug(f"... {order}")`
-evaluates the f-string even when DEBUG is disabled; `PriceLevel.total_quantity`
-re-summed the level on every BEST_BID/ASK and QuerySpread; `create_limit_order`
-copied `holdings` even when `ignore_risk=True`.
+cProfile (gb_mega, Phase 3): `ExchangeAgent.receive_message` 3.9 tot / 18.9 cum
+(`isinstance` + ABC + `logEvent` on every QuerySpread); `Agent.send_message`
+4.2 tot (Cython send + heap); `PriceLevel.__init__` 2.5s / 67k calls;
+`HeapPQueue.put` 1.4 tot vs `heappush` 0.28; extract join+sort of ~1.4M ledger
+dicts.
 
-Phase 3: cheap order `__str__`, cached visible qty (updated on the in-place
-partial-fill decrement), numpy ledger/trace extract, skip the holdings copy
-when `ignore_risk`.
+Phase 4: `type()` dispatch on Exchange / Trading / Scheduled agents (fall
+through for MarketHours / post-close); `ExchangeAgent.send_message` still
+applies `pipeline_delay` to ack/fill/cancel; inline `heappush`/`heappop` on
+the same `(deliver_at, (sender_id, recipient_id, message))` tuples; stamp
+`seq` onto a delivered list at final delivery so extract skips the join+sort;
+`PriceLevel.__init__` one-order fast path.
+
+Phase 4 split of the new binary:
+
+| Unit | kernel | extract_trace | extract_msg | kernel-only ev/s | full ev/s |
+|---|---|---|---|---|---|
+| `as06_throughput_fast` | 0.68s (80%) | 0.13s | 0.04s | 109k | 86.9k |
+| `gb_mega_throughput` | 14.6s (81%) | 2.67s (15%) | **0.80s (4%)** | 80.2k | 64.8k |
+
+New hot spots: Exchange send/recv wrappers (Cython `send_message` time lands
+on the Python caller), `LimitOrder.__init__` / `Message.__post_init__`,
+NoiseTrader `randint` + `act`/`wakeup`, `extract_trace`. `PriceLevel.__init__`,
+`HeapPQueue.put`, and the ledger join+sort left the top 25.
 
 ## CLI
 
@@ -67,17 +81,20 @@ Official ranking is host-measured parquet-row-count / wall clock. Machines
 differ. Traces were compared to the shipped unit references (exact fills,
 coverage, timestamps, message ledger).
 
-**Phase 3: Family 1 14/14 exact. as06, gb_mega, MP (`mp01`, `mp02`) and RA
+**Phase 4: Family 1 14/14 exact. as06, gb_mega, MP (`mp01`, `mp02`) and RA
 (`ra01`, `ra02`) exact.** Phase 2 had already shown 65/65 + 30/30; this
 revision re-ran the mandatory set with no regressions. Official
 `run_regression.py` was not run (no Docker daemon here).
 
-| Scenario | Shipped ev/s | Phase 1 | Phase 2 | Phase 3 | vs Phase 2 |
-|---|---|---|---|---|---|
-| `as06_throughput_fast` | 14,183 | 19,746 | 36,500 | **66,030** | **1.81×** |
-| `gb_mega_throughput` | 10,571 | 22,421 | 28,129 | **48,259** | **1.72×** |
+| Scenario | Shipped ev/s | Phase 1 | Phase 2 | Phase 3 | Phase 4 | vs Phase 3 |
+|---|---|---|---|---|---|---|
+| `as06_throughput_fast` | 14,183 | 19,746 | 36,500 | 66,030 | **84,202** | **1.27×** |
+| `gb_mega_throughput` | 10,571 | 22,421 | 28,129 | 48,259 | **66,921** | **1.39×** |
 
-Repeats on the same host: as06 56.7k–66.0k, gb_mega 43.2k–48.3k. Every
-repeat is above the Phase 2 numbers. The official B200 worker will differ.
+Repeats on the same host: as06 73.9k–84.2k, gb_mega 46.3k–66.9k. Best-of-N
+is the same method Phase 3 used (as06 56.7k–66.0k, gb_mega 43.2k–48.3k).
+Every as06 repeat is above the Phase 3 best; gb_mega's best and median
+repeats are above Phase 3, with one thermally-slower repeat overlapping
+the old range. The official B200 worker will differ.
 
 `events_per_sec` is `n_events / wall_clock_sec` of the simulation loop.

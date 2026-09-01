@@ -15,7 +15,9 @@ Step 3 compact hops were reverted (after-close extras). Step 4
 compiled MM / Value / Momentum `act()`. Step 5 retries compact
 internal hops + a columnar ledger, with `QuerySpreadResponse.mkt_closed
 = current_time > mkt_close`. Step 6 starts the single-C-process cut
-with a bit-exact C `MT19937` and NoiseTrader draws. No GPU.
+with a bit-exact C `MT19937` and NoiseTrader draws. Step 7 ports
+latency lognormal and ValueTrader `observe_price` onto that stream.
+No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -286,7 +288,7 @@ Repeats: as06 150.8k–163.5k, gb_mega 109.8k–131.3k. Official B200
 worker will differ. Both units cleared 10% vs Step 2 on this host.
 That is not 10×. Stop coding on this step.
 
-## Championship step 6 (this change)
+## Championship step 6
 
 Incremental slice of the single-C-process cut: a Cython `MT19937`
 that lock-steps `numpy.random.RandomState` (numpy 1.26 polar
@@ -311,10 +313,39 @@ the wall. Remaining 10× is still one C process for latency /
 `observe_price` / `LimitOrder` construction / extract, not more
 Python agent wrappers.
 
-## Remaining 10× plan
+## Championship step 7 (this change)
 
-~176k / ~138k → ~1.4M / ~1.0M is still ~8×. Next slices, in order:
-(1) C `legacy_lognormal` / `uniform` on the latency model using the
-same `MT19937`, (2) C `observe_price` normal for ValueTrader,
-(3) drop Python `LimitOrder` on the compact hop entirely. After-close
-stays Step 5. GPU only for independent `simulate-batch`.
+Remaining hot-path numpy RNG onto the same C `MT19937`, after
+bit-identity vs numpy 1.26 `RandomState` on those sequences:
+
+- latency `lognormal` = `exp(normal(mu, sigma))` (gauss cache shared)
+- ValueTrader `observe_price` = `int(round(normal(r_t, sqrt(sigma_n))))`;
+  `r_t` still comes from `oracle.observe_price(..., sigma_n=0)` so
+  after-close lookup is unchanged
+
+No new agent wrappers. After-close rules stay Step 5. No GPU.
+
+`mt19937_matches_numpy()` now includes lognormal + observe_price
+lock-step (True at 20×50 and 40×80). **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 6 best | Step 7 best | vs Step 6 |
+|---|---|---|---|
+| `as06_throughput_fast` | 176,368 | **204,482** | **1.16×** |
+| `gb_mega_throughput` | 137,687 | **159,530** | **1.16×** |
+
+Repeats: as06 184.1k–204.5k, gb_mega 130.3k–159.5k. Official B200
+worker will differ. Both units cleared 10% vs Step 6 on this host.
+Hot-path numpy RNG is gone (uniform/pareto latency is unused on
+these units). That is not 10×.
+
+## Remaining 10× path
+
+~204k / ~160k → ~1.4M / ~1.0M is still ~7×. The leftover wall is
+**Python on `Kernel.run`**: Cython `kernel_runner` still enters
+Python for every hop (`LimitOrder` / `cheap_clone` at the agent
+boundary, pandas extract). A full-C kernel loop (no Python on
+`Kernel.run`) is the only remaining path that can move another
+factor; more agent wrappers will not. After-close stays Step 5.
+GPU only for independent `simulate-batch`.

@@ -80,8 +80,22 @@ def _latency_spec(model: Any) -> dict[str, Any]:
     }
 
 
+def _copy_random_state(rs: Any) -> Any:
+    """Clone a RandomState (or the global stream) so C and Python do not share it."""
+    import numpy as np
+
+    clone = np.random.RandomState()
+    clone.set_state(rs.get_state() if hasattr(rs, "get_state") else np.random.get_state())
+    return clone
+
+
 def _oracle_spec(oracle: Any) -> dict[str, Any] | None:
-    """Snapshot SparseMeanRevertingOracle after ``__init__`` (first megashock done)."""
+    """Snapshot SparseMeanRevertingOracle after ``__init__`` (first megashock done).
+
+    Copies both RNG streams. Tags ``pt`` as int vs float64 so C can do
+    ``(t1 - t2)`` in integer nanoseconds when Python stored ints — float64
+    around 2021-ns (~1.6e18) cannot represent a 1 ns step.
+    """
     if oracle is None:
         return None
     import math
@@ -100,11 +114,12 @@ def _oracle_spec(oracle: Any) -> dict[str, Any] | None:
                 "consumed": bool(jump.get("_consumed")),
             }
         )
-    glob = np.random.RandomState()
-    glob.set_state(np.random.get_state())
+    pt_is_float = isinstance(pt, (float, np.floating))
     return {
         "mkt_close": int(oracle.mkt_close),
-        "pt": float(pt),
+        "pt": float(pt) if pt_is_float else 0.0,
+        "pt_ns": 0 if pt_is_float else int(pt),
+        "pt_is_float": bool(pt_is_float),
         "pv": float(pv),
         "r_bar": float(sym["r_bar"]),
         "kappa": float(sym["kappa"]),
@@ -115,8 +130,8 @@ def _oracle_spec(oracle: Any) -> dict[str, Any] | None:
         "mst": float(ms["MegashockTime"]),
         "msv": float(ms["MegashockValue"]),
         "jumps": jumps,
-        "random_state": sym["random_state"],
-        "global_rs": glob,
+        "random_state": _copy_random_state(sym["random_state"]),
+        "global_rs": _copy_random_state(np.random.mtrand._rand),
     }
 
 
@@ -165,6 +180,7 @@ def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
         "agents": roster,
         "latency": _latency_spec(config["agent_latency_model"]),
         "oracle": oracle,
+        "oracle_spec": _oracle_spec(oracle),
     }
 
 

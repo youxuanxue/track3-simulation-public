@@ -5,7 +5,7 @@ Replaces ``Kernel.run``. Heap key, message_id / order_id order, MT19937,
 STP, pipeline_delay and Step 5 after-close match the hybrid. No GPU.
 """
 
-from libc.math cimport exp, log, sqrt
+from libc.math cimport exp, floor, log, sqrt
 from libc.stdint cimport uint32_t
 from libc.stdlib cimport free, malloc, realloc
 from libc.string cimport memmove
@@ -49,6 +49,9 @@ cdef enum:
     STP_OLDEST = 2
     ST_WAKE = 0
     ST_SPREAD = 1
+    ORC_MAX_JUMPS = 4
+    # Flipped after observe_sequence matches Python on stp_cancel_newest + ra01.
+    NATIVE_OBSERVE = 0
 
 
 cdef tuple _MT_NAMES = (
@@ -140,10 +143,22 @@ cdef struct CJump:
     int consumed
 
 
+# Python oracle stores r[symbol] as (ts, v) where ts is either an int
+# (observation / mkt_open) or a float64 (mkt_open + exponential megashock).
+# float64 around 2021-ns (~1.6e18) has ulp ~256, so (double)t1 - (double)t2
+# is not (double)(t1 - t2). Family 1 drifted from that; ra01 also had the
+# megashock sign inverted vs ``msv if randint(2)==0 else -msv``.
+cdef struct CTime:
+    long long ns
+    double fl
+    int is_float
+
+
 cdef struct COracle:
     int enabled
     long long mkt_close
-    double pt
+    CTime pt
+    CTime mst
     double pv
     double r_bar
     double kappa
@@ -151,10 +166,9 @@ cdef struct COracle:
     double ms_lambda
     double ms_mean
     double ms_scale
-    double mst
     double msv
-    CJump jump
-    int has_jump
+    CJump jumps[4]
+    int n_jumps
 
 
 cdef struct LRow:
@@ -272,6 +286,165 @@ cdef class MT19937:
 
     def py_pareto(self, alpha):
         return self.pareto(alpha)
+
+    def py_normal(self, loc, scale):
+        return self.normal(loc, scale)
+
+
+cdef inline CTime _time_ll(long long t) noexcept nogil:
+    cdef CTime x
+    x.ns = t
+    x.fl = 0.0
+    x.is_float = 0
+    return x
+
+
+cdef inline CTime _time_fl(double t) noexcept nogil:
+    cdef CTime x
+    x.ns = 0
+    x.fl = t
+    x.is_float = 1
+    return x
+
+
+cdef inline double _time_sub(CTime *ts, CTime *pt) noexcept nogil:
+    """Python ``ts - pt`` for the (int | float64) pairs the oracle stores."""
+    if ts.is_float:
+        if pt.is_float:
+            return ts.fl - pt.fl
+        return ts.fl - <double>pt.ns
+    if pt.is_float:
+        return <double>ts.ns - pt.fl
+    return <double>(ts.ns - pt.ns)
+
+
+cdef inline int _time_le_ll(long long t, CTime *pt) noexcept nogil:
+    """Python ``current_time <= pt``."""
+    if pt.is_float:
+        return <double>t <= pt.fl
+    return t <= pt.ns
+
+
+cdef inline int _time_lt_ll(CTime *mst, long long t) noexcept nogil:
+    """Python ``mst < current_time``."""
+    if mst.is_float:
+        return mst.fl < <double>t
+    return mst.ns < t
+
+
+cdef inline int _time_ge_jump(CTime *ts, long long jump_ns) noexcept nogil:
+    """Python ``ts >= jump['time_ns']``."""
+    if ts.is_float:
+        return ts.fl >= <double>jump_ns
+    return ts.ns >= jump_ns
+
+
+cdef inline int _py_round_nonneg(double v) noexcept nogil:
+    """Python 3 ``int(round(v))`` for v >= 0 (round-half-to-even)."""
+    cdef double fl, diff
+    cdef long long n
+    if v <= 0.0:
+        return 0
+    fl = floor(v)
+    diff = v - fl
+    n = <long long>fl
+    if diff > 0.5:
+        return <int>(n + 1)
+    if diff < 0.5:
+        return <int>n
+    if (n & 1) == 0:
+        return <int>n
+    return <int>(n + 1)
+
+
+cdef int _orc_compute(COracle *orc, MT19937 mt, CTime ts, double v_adj) except *:
+    cdef double d, mu, gamma, theta, loc, scale, v
+    cdef int iv, i
+    d = _time_sub(&ts, &orc.pt)
+    mu = orc.r_bar
+    gamma = orc.kappa
+    theta = orc.fund_vol
+    loc = mu + (orc.pv - mu) * exp(-gamma * d)
+    scale = sqrt(((theta * theta) / (2.0 * gamma)) * (1.0 - exp(-2.0 * gamma * d)))
+    v = mt.normal(loc, scale) + v_adj
+    if v < 0.0:
+        v = 0.0
+    iv = _py_round_nonneg(v)
+    for i in range(orc.n_jumps):
+        if (not orc.jumps[i].consumed) and _time_ge_jump(&ts, orc.jumps[i].time_ns):
+            iv += orc.jumps[i].magnitude
+            if iv < 0:
+                iv = 0
+            orc.jumps[i].consumed = 1
+    orc.pt = ts
+    orc.pv = iv
+    return iv
+
+
+cdef int _orc_advance(COracle *orc, MT19937 gmt, MT19937 omt, long long current_time) except *:
+    cdef CTime pt, mst
+    cdef double msv, gap
+    if not orc.enabled:
+        return 0
+    if _time_le_ll(current_time, &orc.pt):
+        return <int>orc.pv
+    mst = orc.mst
+    msv = orc.msv
+    while _time_lt_ll(&mst, current_time):
+        _orc_compute(orc, omt, mst, msv)
+        # Python: pt, pv = mst, v then mst = pt + int(exponential)
+        pt = mst
+        gap = floor(gmt.exponential(1.0 / orc.ms_lambda))
+        if pt.is_float:
+            mst = _time_fl(pt.fl + gap)
+        else:
+            mst = _time_fl(<double>pt.ns + gap)
+        msv = omt.normal(orc.ms_mean, orc.ms_scale)
+        # Python: msv if randint(2)==0 else -msv
+        if omt.randint(0, 2) != 0:
+            msv = -msv
+        orc.mst = mst
+        orc.msv = msv
+    return _orc_compute(orc, omt, _time_ll(current_time), 0.0)
+
+
+cdef int _orc_observe(COracle *orc, MT19937 gmt, MT19937 omt, long long t) except *:
+    cdef long long ts = t
+    if t >= orc.mkt_close:
+        ts = orc.mkt_close - 1
+    return _orc_advance(orc, gmt, omt, ts)
+
+
+cdef tuple _orc_bind(COracle *orc, object spec):
+    cdef int i
+    cdef object jumps, mt_sym, mt_glob
+    orc.enabled = 1
+    orc.mkt_close = spec["mkt_close"]
+    if spec.get("pt_is_float"):
+        orc.pt = _time_fl(float(spec["pt"]))
+    else:
+        orc.pt = _time_ll(int(spec["pt_ns"]))
+    orc.pv = spec["pv"]
+    orc.r_bar = spec["r_bar"]
+    orc.kappa = spec["kappa"]
+    orc.fund_vol = spec["fund_vol"]
+    orc.ms_lambda = spec["ms_lambda"]
+    orc.ms_mean = spec["ms_mean"]
+    orc.ms_scale = spec["ms_scale"]
+    orc.mst = _time_fl(float(spec["mst"]))
+    orc.msv = spec["msv"]
+    orc.n_jumps = 0
+    jumps = spec.get("jumps") or []
+    for i in range(min(len(jumps), <int>ORC_MAX_JUMPS)):
+        orc.jumps[i].time_ns = jumps[i]["time_ns"]
+        orc.jumps[i].magnitude = jumps[i]["magnitude"]
+        orc.jumps[i].consumed = 1 if jumps[i]["consumed"] else 0
+        orc.n_jumps += 1
+    mt_sym = MT19937()
+    mt_sym.bind_numpy(spec["random_state"])
+    mt_glob = MT19937()
+    mt_glob.bind_numpy(spec["global_rs"])
+    return mt_sym, mt_glob
 
 
 cdef inline int _event_less(Event *a, Event *b) noexcept nogil:
@@ -1023,59 +1196,10 @@ cdef class NativeSim:
         if self.subs != NULL:
             free(self.subs)
 
-    cdef int _compute_fund(self, double ts, double v_adj, double pt, double pv) except *:
-        cdef double d, mu, gamma, theta, loc, scale, v
-        cdef MT19937 mt = <MT19937>self.orc_mt
-        d = ts - pt
-        mu = self.orc.r_bar
-        gamma = self.orc.kappa
-        theta = self.orc.fund_vol
-        loc = mu + (pv - mu) * exp(-gamma * d)
-        scale = sqrt(((theta * theta) / (2.0 * gamma)) * (1.0 - exp(-2.0 * gamma * d)))
-        v = mt.normal(loc, scale) + v_adj
-        if v < 0.0:
-            v = 0.0
-        cdef int iv = int(round(v))
-        if self.orc.has_jump and (not self.orc.jump.consumed) and ts >= self.orc.jump.time_ns:
-            iv += self.orc.jump.magnitude
-            if iv < 0:
-                iv = 0
-            self.orc.jump.consumed = 1
-        self.orc.pt = ts
-        self.orc.pv = iv
-        return iv
-
-    cdef int _advance(self, long long current_time) except *:
-        cdef double pt, pv, mst, msv
-        cdef int v
-        cdef MT19937 gmt, omt
-        if not self.orc.enabled:
-            return 0
-        if current_time <= self.orc.pt:
-            return <int>self.orc.pv
-        pt = self.orc.pt
-        pv = self.orc.pv
-        mst = self.orc.mst
-        msv = self.orc.msv
-        gmt = <MT19937>self.glob_mt
-        omt = <MT19937>self.orc_mt
-        while mst < current_time:
-            v = self._compute_fund(mst, msv, pt, pv)
-            pt = mst
-            pv = v
-            mst = pt + <double>int(gmt.exponential(1.0 / self.orc.ms_lambda))
-            msv = omt.normal(self.orc.ms_mean, self.orc.ms_scale)
-            if omt.randint(0, 2) == 0:
-                msv = -msv
-            self.orc.mst = mst
-            self.orc.msv = msv
-        return self._compute_fund(<double>current_time, 0.0, pt, pv)
-
     cdef int _observe(self, long long t) except *:
-        cdef long long ts = t
-        if t >= self.orc.mkt_close:
-            ts = self.orc.mkt_close - 1
-        return self._advance(ts)
+        return _orc_observe(
+            &self.orc, <MT19937>self.glob_mt, <MT19937>self.orc_mt, t
+        )
 
     cdef void _zero_ev(self, Event *ev) noexcept:
         ev.order.time_placed = 0
@@ -1396,7 +1520,10 @@ cdef class NativeSim:
                 fmid = float(ask)
             else:
                 return
-            r_t = self.oracle.observe_price("ABM", self.now, self.rss[a.id], sigma_n=0)
+            if NATIVE_OBSERVE and self.orc.enabled:
+                r_t = self._observe(self.now)
+            else:
+                r_t = self.oracle.observe_price("ABM", self.now, self.rss[a.id], sigma_n=0)
             if a.sigma_n:
                 fundamental = int(round((<MT19937>self.mts[a.id]).normal(r_t, sqrt(a.sigma_n))))
             else:
@@ -1610,32 +1737,7 @@ cdef class NativeSim:
         orc = spec.get("oracle_spec")
         self.orc.enabled = 0
         if orc is not None:
-            self.orc.enabled = 1
-            self.orc.mkt_close = orc["mkt_close"]
-            self.orc.pt = orc["pt"]
-            self.orc.pv = orc["pv"]
-            self.orc.r_bar = orc["r_bar"]
-            self.orc.kappa = orc["kappa"]
-            self.orc.fund_vol = orc["fund_vol"]
-            self.orc.ms_lambda = orc["ms_lambda"]
-            self.orc.ms_mean = orc["ms_mean"]
-            self.orc.ms_scale = orc["ms_scale"]
-            self.orc.mst = orc["mst"]
-            self.orc.msv = orc["msv"]
-            self.orc.has_jump = 0
-            self.orc.jump.consumed = 1
-            jumps = orc.get("jumps") or []
-            if jumps:
-                self.orc.has_jump = 1
-                self.orc.jump.time_ns = jumps[0]["time_ns"]
-                self.orc.jump.magnitude = jumps[0]["magnitude"]
-                self.orc.jump.consumed = 1 if jumps[0]["consumed"] else 0
-            mt = MT19937()
-            mt.bind_numpy(orc["random_state"])
-            self.orc_mt = mt
-            mt = MT19937()
-            mt.bind_numpy(orc["global_rs"])
-            self.glob_mt = mt
+            self.orc_mt, self.glob_mt = _orc_bind(&self.orc, orc)
         self.mts = [None] * self.n
         self.rss = [None] * self.n
         for i in range(self.n):
@@ -1737,8 +1839,66 @@ def run_native_sim(spec):
     return sim.result()
 
 
+cdef class NativeOracle:
+    """Standalone C observe_price for lock-step proof vs the Python oracle."""
+    cdef COracle orc
+    cdef object orc_mt
+    cdef object glob_mt
+
+    def __cinit__(self):
+        self.orc.enabled = 0
+        self.orc_mt = None
+        self.glob_mt = None
+
+    def setup(self, spec):
+        self.orc_mt, self.glob_mt = _orc_bind(&self.orc, spec)
+        return self
+
+    def observe(self, t):
+        return _orc_observe(
+            &self.orc, <MT19937>self.glob_mt, <MT19937>self.orc_mt, int(t)
+        )
+
+    def state(self):
+        cdef int i
+        jumps = []
+        for i in range(self.orc.n_jumps):
+            jumps.append(
+                {
+                    "time_ns": self.orc.jumps[i].time_ns,
+                    "magnitude": self.orc.jumps[i].magnitude,
+                    "consumed": bool(self.orc.jumps[i].consumed),
+                }
+            )
+        return {
+            "pt_ns": self.orc.pt.ns,
+            "pt_fl": self.orc.pt.fl,
+            "pt_is_float": bool(self.orc.pt.is_float),
+            "pv": int(self.orc.pv),
+            "mst_fl": self.orc.mst.fl,
+            "mst_is_float": bool(self.orc.mst.is_float),
+            "msv": float(self.orc.msv),
+            "jumps": jumps,
+        }
+
+
+def native_observe_enabled():
+    return NATIVE_OBSERVE != 0
+
+
+def observe_many(oracle_spec, times):
+    """Return ``[(t, r_t, state), ...]`` advancing the C oracle in order."""
+    cdef NativeOracle o = NativeOracle()
+    o.setup(oracle_spec)
+    out = []
+    for t in times:
+        r = o.observe(t)
+        out.append((int(t), int(r), o.state()))
+    return out
+
+
 def native_rng_matches_numpy(seeds=20, draws=40):
-    """True iff C uniform / exponential / pareto lock-step numpy RandomState."""
+    """True iff C uniform / exponential / pareto / normal lock-step RandomState."""
     import numpy as np
 
     for seed in range(seeds):
@@ -1751,5 +1911,7 @@ def native_rng_matches_numpy(seeds=20, draws=40):
             if mt.exponential(2.5) != float(rs.exponential(scale=2.5)):
                 return False
             if mt.pareto(1.5) != float(rs.pareto(1.5)):
+                return False
+            if mt.normal(100000.0, 11.1) != float(rs.normal(100000.0, 11.1)):
                 return False
     return True

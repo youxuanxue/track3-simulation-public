@@ -10,8 +10,10 @@ and the Phase 3–6 cuts of the Python tax each profiler pass named.
 Phase 6 compiled the remaining hubs and then hit diminishing returns
 (<10% on both throughput units). Championship step 1 replaced the
 Python tuple heap with a C `EventQueue`. Step 2 inlines PriceLevel
-ops and compiles `cancel_order` inside the same Cython book;
-leftover agents stay Python. No GPU.
+ops and compiles `cancel_order` inside the same Cython book.
+Step 3 compact hops were reverted (after-close extras). Step 4
+compiles MM / Value / Momentum `act()` (Noise was already compiled)
+with the same `numpy.random.RandomState` draw order. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -220,3 +222,30 @@ Value / Momentum with a bit-exact `RandomState` stand-in**, and
 only then a second pass at compact hops that does not let an extra
 `act()` through after close. GPU still only for independent
 `simulate-batch` scenarios.
+
+## Championship step 4 (this change)
+
+Compile MarketMaker / ValueTrader / MomentumTrader `act()` (NoiseTrader
+was already a Cython `noise_act`) and `TradingAgent.cancel_all_orders`.
+Draws stay on `self.random_state` (`normal` / `randint`) and
+`oracle.observe_price(..., random_state=self.random_state)` — no C RNG
+stand-in. `sched_receive_message` still skips `act()` when
+`mkt_closed`. Heap key, `message_id` / `order_id` construction order,
+`pipeline_delay`, and STP are unchanged. **No compact-hop retry.**
+No GPU.
+
+**Family 1 14/14 exact**, including s001 event counts:
+`ORDER_SUBMITTED` 120, wakeups 84, QuerySpread 74, **no
+`MarketClosedMsg`**, no extra after-close LimitOrderMsg /
+CancelOrderMsg. as06, gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 2 best | Step 4 best | vs Step 2 |
+|---|---|---|---|
+| `as06_throughput_fast` | 144,588 | **140,921** | **0.97×** |
+| `gb_mega_throughput` | 103,585 | **93,514** | **0.90×** |
+
+Repeats: as06 116.6k–140.9k, gb_mega 74.9k–93.5k (this host was
+noisier than the step-2 window). Official B200 worker will differ.
+**No speed is claimed.** The gate was bit-exact Family 1, not a
+throughput win. Compact hops stay off until after-close `act()` is
+proven identical on a hop cut — this step did not retry that.

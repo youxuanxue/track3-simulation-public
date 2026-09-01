@@ -18,7 +18,8 @@ internal hops + a columnar ledger, with `QuerySpreadResponse.mkt_closed
 with a bit-exact C `MT19937` and NoiseTrader draws. Step 7 ports
 latency lognormal and ValueTrader `observe_price` onto that stream.
 Step 8 dispatches wakeup / act / exchange inside Cython and keeps
-`LimitOrder` off the hop (field tuples). No GPU.
+`LimitOrder` off the hop (field tuples). Step 9 puts a C `COrder`
+in the book and writes trace / ledger from C arrays. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -363,12 +364,34 @@ Repeats: as06 199.4k–222.4k, gb_mega 136.0k–168.1k. Official B200
 worker will differ. Incremental C dispatch is exact and a few
 percent faster; it is not 10×.
 
+## Championship step 9 (this change)
+
+C book + C ledger. `enter_order` / `execute_order` / `handle_limit`
+store a compact `COrder` struct — no Python `LimitOrder` on the
+book. Fill / accept / cancel snapshots stay (partial-fill
+semantics) as primitive tuples, not `LimitOrder` objects. Trace and
+message ledger write C arrays; pandas only at the final parquet
+conversion. After-close rules stay Step 5. Step 7 C RNG stays.
+No GPU.
+
+`mt19937_matches_numpy()` still True. **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 8 best | Step 9 best | vs Step 8 |
+|---|---|---|---|
+| `as06_throughput_fast` | 222,357 | **241,776** | **1.09×** |
+| `gb_mega_throughput` | 168,120 | **206,425** | **1.23×** |
+
+Repeats: as06 227.0k–241.8k, gb_mega 200.8k–206.4k. Official B200
+worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
+
 ## Remaining 10× path
 
-~222k / ~168k → ~1.4M / ~1.0M is still ~6×. Dispatch no longer
-materializes `Message` / per-hop `LimitOrder`, but the book still
-holds Python `LimitOrder` objects (`enter_order` clone, fill
-snapshot, `handle_limit_order` method) and extract still builds
-pandas at the end. A C book / C ledger (Python only for scenario
-load and final parquet) is the leftover cut. After-close stays
-Step 5. GPU only for independent `simulate-batch`.
+~242k / ~206k → ~1.4M / ~1.0M is still ~5–6×. The book is C
+orders and the ledger is C arrays, but the kernel hop is still a
+Python `Event` with a tuple payload, agents still hold Python
+`LimitOrder` in `self.orders`, and extract still builds a pandas
+frame for parquet. A fully C event loop (no tuple hops, no pandas)
+is the leftover cut. After-close stays Step 5. GPU only for
+independent `simulate-batch`.

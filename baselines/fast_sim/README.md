@@ -6,7 +6,10 @@
 new matching engine. The kernel, limit-order book, agents, oracle and latency
 model stay the pinned ABIDES objects. Speed comes from work that does **not**
 appear in the scored traces, a compiled (Cython) OrderBook / Kernel hot path,
-and the Phase 3–5 cuts of the Python tax each profiler pass named.
+and the Phase 3–6 cuts of the Python tax each profiler pass named.
+Phase 6 compiled the remaining hubs and then hit diminishing returns
+(<10% on both throughput units); a 10× path is in the championship
+roadmap below, not more f-string patches.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -79,20 +82,49 @@ Official ranking is host-measured parquet-row-count / wall clock. Machines
 differ. Traces were compared to the shipped unit references (exact fills,
 coverage, timestamps, message ledger).
 
-**Phase 5: Family 1 14/14 exact. as06, gb_mega, MP (`mp01`, `mp02`) and RA
-(`ra01`, `ra02`) exact.** Phase 2 had already shown 65/65 + 30/30; this
-revision re-ran the mandatory set with no regressions. Official
-`run_regression.py` was not run (no Docker daemon here).
+**Phase 6: Family 1 14/14 exact. as06, gb_mega, MP (`mp01`) and RA (`ra01`)
+exact.** Phase 6 compiled Exchange receive / wakeup / place / `noise_act`
+and stored the ledger as tuples. That was a real attempt at the Phase 5
+hubs. **Both units moved <10% vs Phase 5** (as06 **1.08×**, gb_mega
+inside the Phase 5 repeat band). Stop. No more micro-opts.
 
-| Scenario | Shipped | P1 | P2 | P3 | P4 | Phase 5 | vs Phase 4 |
-|---|---|---|---|---|---|---|---|
-| `as06_throughput_fast` | 14,183 | 19,746 | 36,500 | 66,030 | 84,202 | **119,608** | **1.42×** |
-| `gb_mega_throughput` | 10,571 | 22,421 | 28,129 | 48,259 | 66,921 | **78,140** | **1.17×** |
+| Scenario | Shipped | P3 | P4 | P5 | Phase 6 | vs Phase 5 |
+|---|---|---|---|---|---|---|
+| `as06_throughput_fast` | 14,183 | 66,030 | 84,202 | 119,608 | **129,295** | **1.08×** |
+| `gb_mega_throughput` | 10,571 | 48,259 | 66,921 | 78,140 | **74,862** | **0.96×** |
 
-Repeats on the same host: as06 106k–120k, gb_mega 56.3k–78.1k. Best-of-N
-matches earlier phases. Every as06 repeat is above the Phase 4 best;
-gb_mega's best is above Phase 4, with slower repeats overlapping the old
-range (same thermal pattern as Phase 4). The official B200 worker will
-differ.
+Repeats: as06 120k–129k, gb_mega 65.6k–74.9k. Official B200 worker will
+differ. `events_per_sec` is `n_events / wall_clock_sec`.
 
-`events_per_sec` is `n_events / wall_clock_sec` of the simulation loop.
+## Championship roadmap (what 10× vs current would take)
+
+A 10× from ~120k / ~78k is **~1.2M / ~780k ev/s**. That is not another
+`__str__` or `isinstance` patch. Remaining wall is **per-message Python**:
+`LimitOrder` / `Message` objects, a heap of Python tuples, a numpy
+`RandomState` call per NoiseTrader draw, a latency draw + ledger row per
+send, and MM/Value/Momentum `act()` still in Python. Discrete-event
+matching plus Tier-A exactness forbids batched/JAX books.
+
+**Keep in Python:** scenario JSON → config, rare paths (MarketHours,
+post-close, modify/replace), parquet extract.
+
+**Compile together:** book + kernel + all four Track-3 agents as one
+C/Cython process with (1) compact event structs that still assign
+`message_id` / `order_id` in ABIDES construction order, (2) a C heap
+with the same `(deliver_at, (sid, rid, message))` / `Message.__lt__`
+tie-break, (3) an RNG that matches `numpy.random.RandomState` bit-exact
+(or a pre-drawn stream consumed in the same order), (4) a columnar
+ledger written at deliver time.
+
+**GPU:** only for *independent* `simulate-batch` scenarios. Never to
+reorder one book's events.
+
+**Tier-A risks:** heap-tie reordering; `message_id`/`order_id` construction
+order; partial-fill snapshot vs in-place qty; `pipeline_delay` / latency
+draws; STP `cancel_newest` / `cancel_oldest`; Kendall-τ if time
+arithmetic changes.
+
+**Suggested sequence:** (1) C event queue + compiled Exchange send/recv
+while leftover agents still see Python objects; (2) compile Noise / MM /
+Value / Momentum with bit-exact RNG; (3) zero-copy columnar ledger;
+(4) GPU only for batch-of-scenarios.

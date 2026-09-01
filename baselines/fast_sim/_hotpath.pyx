@@ -14,6 +14,18 @@ _PriceLevel = None
 _MessageBatch = None
 _WakeupMsg = None
 _Message = None
+_Order = None
+_LimitOrderMsg = None
+_QuerySpreadMsg = None
+_QuerySpreadResponseMsg = None
+_CancelOrderMsg = None
+_MarketOrderMsg = None
+_MarketHoursRequestMsg = None
+_MarketClosePriceRequestMsg = None
+_BID = None
+_ASK = None
+_py_exch_recv_fallback = None
+_py_ta_recv_fallback = None
 
 
 def make_order_msg(cls, order):
@@ -312,17 +324,17 @@ def send_message(self, sender_id, recipient_id, message, delay=0):
     pending = getattr(self, "_pending_ledger", None)
     for lm in ledger_msgs:
         ord_ = getattr(lm, "order", None)
-        entry = {
-            "message_id": lm.message_id,
-            "src_id": sender_id,
-            "dst_id": recipient_id,
-            "t_send_ns": sent_time,
-            "t_recv_ns": deliver_at,
-            "latency_ns": latency_ns,
-            "msg_type": type(lm).__name__,
-            "order_id": getattr(ord_, "order_id", None),
-            "causal_parent": parent,
-        }
+        entry = (
+            lm.message_id,
+            sender_id,
+            recipient_id,
+            sent_time,
+            deliver_at,
+            latency_ns,
+            type(lm).__name__,
+            getattr(ord_, "order_id", None),
+            parent,
+        )
         ledger.append(entry)
         if pending is not None:
             pending[(lm.message_id, recipient_id)] = entry
@@ -376,18 +388,18 @@ def kernel_runner(self, agent_actions=None):
             seq = self._deliver_seq
             seq_by_key[(message.message_id, recipient_id)] = seq
             self._deliver_seq = seq + 1
-            entry = {
-                "message_id": message.message_id,
-                "src_id": recipient_id,
-                "dst_id": recipient_id,
-                "t_send_ns": None,
-                "t_recv_ns": self.current_time,
-                "latency_ns": 0,
-                "msg_type": "AGENT_WAKEUP",
-                "order_id": None,
-                "causal_parent": None,
-                "seq": seq,
-            }
+            entry = (
+                message.message_id,
+                recipient_id,
+                recipient_id,
+                None,
+                self.current_time,
+                0,
+                "AGENT_WAKEUP",
+                None,
+                None,
+                seq,
+            )
             ledger.append(entry)
             if delivered is not None:
                 delivered.append(entry)
@@ -414,10 +426,21 @@ def kernel_runner(self, agent_actions=None):
                 self._deliver_seq = seq + 1
                 if pending is not None:
                     entry = pending.pop((sub.message_id, recipient_id), None)
-                    if entry is not None:
-                        entry["seq"] = seq
-                        if delivered is not None:
-                            delivered.append(entry)
+                    if entry is not None and delivered is not None:
+                        delivered.append(
+                            (
+                                entry[0],
+                                entry[1],
+                                entry[2],
+                                entry[3],
+                                entry[4],
+                                entry[5],
+                                entry[6],
+                                entry[7],
+                                entry[8],
+                                seq,
+                            )
+                        )
                 agents[recipient_id].receive_message(
                     self.current_time, sender_id, sub
                 )
@@ -426,6 +449,273 @@ def kernel_runner(self, agent_actions=None):
         self.gym_agents[0].update_raw_state()
         return {"done": True, "result": self.gym_agents[0].get_raw_state()}
     return {"done": True, "result": None}
+
+
+def _l2(book_side, depth):
+    cdef Py_ssize_t i, n
+    out = []
+    n = len(book_side)
+    if depth < n:
+        n = depth
+    for i in range(n):
+        pl = book_side[i]
+        q = pl._visible_qty
+        if q > 0:
+            out.append((pl.price, q))
+    return out
+
+
+def make_query_spread(symbol, depth):
+    m = _QuerySpreadMsg.__new__(_QuerySpreadMsg)
+    m.symbol = symbol
+    m.depth = depth
+    mid = _Message._Message__message_id_counter
+    m.message_id = mid
+    _Message._Message__message_id_counter = mid + 1
+    return m
+
+
+def make_spread_resp(symbol, depth, bids, asks, last_trade):
+    m = _QuerySpreadResponseMsg.__new__(_QuerySpreadResponseMsg)
+    m.symbol = symbol
+    m.mkt_closed = False
+    m.depth = depth
+    m.bids = bids
+    m.asks = asks
+    m.last_trade = last_trade
+    mid = _Message._Message__message_id_counter
+    m.message_id = mid
+    _Message._Message__message_id_counter = mid + 1
+    return m
+
+
+def exch_receive_message(self, current_time, sender_id, message):
+    if current_time > self.mkt_close:
+        return _py_exch_recv_fallback(self, current_time, sender_id, message)
+    self.current_time = current_time
+    self.kernel.agent_computation_delays[self.id] = self.computation_delay
+    t = type(message)
+    if t is _LimitOrderMsg:
+        order = message.order
+        book = self.order_books.get(order.symbol)
+        if book is not None:
+            book.handle_limit_order(cheap_clone(order))
+            if self.data_subscriptions:
+                self.publish_order_book_data()
+        return
+    if t is _QuerySpreadMsg:
+        book = self.order_books.get(message.symbol)
+        if book is not None:
+            depth = message.depth
+            self.kernel.send_message(
+                self.id,
+                sender_id,
+                make_spread_resp(
+                    message.symbol,
+                    depth,
+                    _l2(book.bids, depth),
+                    _l2(book.asks, depth),
+                    book.last_trade,
+                ),
+                delay=0,
+            )
+        return
+    if t is _CancelOrderMsg:
+        order = message.order
+        book = self.order_books.get(order.symbol)
+        if book is not None:
+            book.cancel_order(cheap_clone(order), message.tag, message.metadata)
+            if self.data_subscriptions:
+                self.publish_order_book_data()
+        return
+    if t is _MarketHoursRequestMsg:
+        return _py_exch_recv_fallback(self, current_time, sender_id, message)
+    if t is _MarketOrderMsg:
+        order = message.order
+        book = self.order_books.get(order.symbol)
+        if book is not None:
+            book.handle_market_order(cheap_clone(order))
+            if self.data_subscriptions:
+                self.publish_order_book_data()
+        return
+    return _py_exch_recv_fallback(self, current_time, sender_id, message)
+
+
+def sched_wakeup(self, current_time):
+    self.current_time = current_time
+    if self.first_wake:
+        self.first_wake = False
+        self.kernel.send_message(
+            self.id,
+            self.exchange_id,
+            make_empty_msg(_MarketClosePriceRequestMsg),
+            delay=0,
+        )
+    if self.mkt_open is None:
+        self.kernel.send_message(
+            self.id,
+            self.exchange_id,
+            make_empty_msg(_MarketHoursRequestMsg),
+            delay=0,
+        )
+        return
+    if not self.mkt_close or self.mkt_closed:
+        return
+    self.kernel.set_wakeup(self.id, current_time + self.interval_ns)
+    self.kernel.send_message(
+        self.id, self.exchange_id, make_query_spread(self.symbol, 1), delay=0
+    )
+    self.state = "AWAITING_SPREAD"
+
+
+def place_limit_order(
+    self,
+    symbol,
+    quantity,
+    side,
+    limit_price,
+    order_id=None,
+    is_hidden=False,
+    is_price_to_comply=False,
+    insert_by_id=False,
+    is_post_only=False,
+    ignore_risk=True,
+    tag=None,
+):
+    if quantity <= 0:
+        return
+    if not ignore_risk:
+        order = self.create_limit_order(
+            symbol,
+            quantity,
+            side,
+            limit_price,
+            order_id,
+            is_hidden,
+            is_price_to_comply,
+            insert_by_id,
+            is_post_only,
+            ignore_risk,
+            tag,
+        )
+        if order is None:
+            return
+    else:
+        order = _LimitOrder.__new__(_LimitOrder)
+        order.agent_id = self.id
+        order.time_placed = self.current_time
+        order.symbol = symbol
+        order.quantity = quantity
+        order.side = side
+        if order_id is None:
+            order_id = _Order._order_id_counter
+            _Order._order_id_counter = order_id + 1
+        order.order_id = order_id
+        order.fill_price = None
+        order.tag = tag
+        order.limit_price = limit_price
+        order.is_hidden = is_hidden
+        order.is_price_to_comply = is_price_to_comply
+        order.insert_by_id = insert_by_id
+        order.is_post_only = is_post_only
+    self.orders[order.order_id] = cheap_clone(order)
+    self.kernel.send_message(
+        self.id, self.exchange_id, make_order_msg(_LimitOrderMsg, order), delay=0
+    )
+    if self.log_orders:
+        self.log.append(
+            (
+                self.current_time,
+                "ORDER_SUBMITTED",
+                order.agent_id,
+                "BID" if side is _BID else "ASK",
+                order.limit_price,
+                order.quantity,
+                order.order_id,
+            )
+        )
+
+
+def noise_act(self):
+    symbol = self.symbol
+    bids = self.known_bids.get(symbol)
+    asks = self.known_asks.get(symbol)
+    bid = bids[0][0] if bids else None
+    ask = asks[0][0] if asks else None
+    rs = self.random_state
+    size = int(max(1, round(rs.normal(self.order_size_mean, self.order_size_std))))
+    buy = rs.randint(0, 2)
+    offset = int(rs.randint(0, self.price_offset_ticks + 1))
+    if buy:
+        anchor = int(ask) if ask else (int(bid) if bid else self.reference_price)
+        place_limit_order(self, symbol, size, _BID, anchor + offset)
+    else:
+        anchor = int(bid) if bid else (int(ask) if ask else self.reference_price)
+        place_limit_order(self, symbol, size, _ASK, anchor - offset)
+
+
+def sched_receive_message(self, current_time, sender_id, message):
+    t = type(message)
+    if t is _QuerySpreadResponseMsg:
+        self.current_time = current_time
+        if message.mkt_closed:
+            self.mkt_closed = True
+        symbol = message.symbol
+        self.last_trade[symbol] = message.last_trade
+        if self.mkt_closed:
+            self.daily_close_price[symbol] = message.last_trade
+        self.known_bids[symbol] = message.bids
+        self.known_asks[symbol] = message.asks
+        self.book = ""
+        if self.state == "AWAITING_SPREAD":
+            if not self.mkt_closed:
+                self.act()
+            self.state = "AWAITING_WAKEUP"
+        return
+    if t is _OrderExecutedMsg:
+        self.current_time = current_time
+        self.order_executed(message.order)
+        return
+    if t is _OrderAcceptedMsg:
+        self.current_time = current_time
+        self.order_accepted(message.order)
+        return
+    if t is _OrderCancelledMsg:
+        self.current_time = current_time
+        self.order_cancelled(message.order)
+        return
+    return _py_ta_recv_fallback(self, current_time, sender_id, message)
+
+
+def bind_agent_hotpath(
+    LimitOrderMsg,
+    QuerySpreadMsg,
+    QuerySpreadResponseMsg,
+    CancelOrderMsg,
+    MarketOrderMsg,
+    MarketHoursRequestMsg,
+    MarketClosePriceRequestMsg,
+    Side,
+    Order,
+    exch_fallback,
+    ta_fallback,
+):
+    global _LimitOrderMsg, _QuerySpreadMsg, _QuerySpreadResponseMsg
+    global _CancelOrderMsg, _MarketOrderMsg, _MarketHoursRequestMsg
+    global _MarketClosePriceRequestMsg, _BID, _ASK, _Order
+    global _py_exch_recv_fallback, _py_ta_recv_fallback
+    _LimitOrderMsg = LimitOrderMsg
+    _QuerySpreadMsg = QuerySpreadMsg
+    _QuerySpreadResponseMsg = QuerySpreadResponseMsg
+    _CancelOrderMsg = CancelOrderMsg
+    _MarketOrderMsg = MarketOrderMsg
+    _MarketHoursRequestMsg = MarketHoursRequestMsg
+    _MarketClosePriceRequestMsg = MarketClosePriceRequestMsg
+    _BID = Side.BID
+    _ASK = Side.ASK
+    _Order = Order
+    _py_exch_recv_fallback = exch_fallback
+    _py_ta_recv_fallback = ta_fallback
 
 
 def apply_hotpath_patches():

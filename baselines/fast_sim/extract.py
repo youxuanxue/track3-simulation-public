@@ -281,7 +281,7 @@ def _nullable_int64(values: np.ndarray, mask: np.ndarray) -> pd.Series:
     return s
 
 
-def _message_df_from_rows(rows: list[dict], *, seqs: list[int] | None = None) -> pd.DataFrame:
+def _message_df_from_rows(rows: list, *, seqs: list[int] | None = None) -> pd.DataFrame:
     n = len(rows)
     seq = np.empty(n, dtype=np.int64)
     t_recv = np.empty(n, dtype=np.int64)
@@ -297,29 +297,55 @@ def _message_df_from_rows(rows: list[dict], *, seqs: list[int] | None = None) ->
     parent = np.empty(n, dtype=np.int64)
     parent_na = np.zeros(n, dtype=np.bool_)
 
-    for i, r in enumerate(rows):
-        seq[i] = r["seq"] if seqs is None else seqs[i]
-        t_recv[i] = r["t_recv_ns"]
-        ts = r["t_send_ns"]
-        if ts is None:
-            t_send_na[i] = True
-        else:
-            t_send[i] = ts
-        latency[i] = r["latency_ns"]
-        src[i] = r["src_id"]
-        dst[i] = r["dst_id"]
-        mid[i] = r["message_id"]
-        msg_type[i] = r["msg_type"]
-        o = r["order_id"]
-        if o is None:
-            oid_na[i] = True
-        else:
-            oid[i] = o
-        p = r["causal_parent"]
-        if p is None:
-            parent_na[i] = True
-        else:
-            parent[i] = p
+    r0 = rows[0]
+    if isinstance(r0, tuple):
+        for i, r in enumerate(rows):
+            mid[i] = r[0]
+            src[i] = r[1]
+            dst[i] = r[2]
+            ts = r[3]
+            if ts is None:
+                t_send_na[i] = True
+            else:
+                t_send[i] = ts
+            t_recv[i] = r[4]
+            latency[i] = r[5]
+            msg_type[i] = r[6]
+            o = r[7]
+            if o is None:
+                oid_na[i] = True
+            else:
+                oid[i] = o
+            p = r[8]
+            if p is None:
+                parent_na[i] = True
+            else:
+                parent[i] = p
+            seq[i] = r[9] if len(r) > 9 else seqs[i]
+    else:
+        for i, r in enumerate(rows):
+            seq[i] = r["seq"] if seqs is None else seqs[i]
+            t_recv[i] = r["t_recv_ns"]
+            ts = r["t_send_ns"]
+            if ts is None:
+                t_send_na[i] = True
+            else:
+                t_send[i] = ts
+            latency[i] = r["latency_ns"]
+            src[i] = r["src_id"]
+            dst[i] = r["dst_id"]
+            mid[i] = r["message_id"]
+            msg_type[i] = r["msg_type"]
+            o = r["order_id"]
+            if o is None:
+                oid_na[i] = True
+            else:
+                oid[i] = o
+            p = r["causal_parent"]
+            if p is None:
+                parent_na[i] = True
+            else:
+                parent[i] = p
 
     df = pd.DataFrame(
         {

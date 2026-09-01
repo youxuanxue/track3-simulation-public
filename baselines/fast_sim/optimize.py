@@ -182,6 +182,7 @@ def apply_runtime_patches() -> None:
     _apply_phase3_patches()
     _apply_phase4_patches()
     _apply_phase5_patches()
+    _apply_phase6_patches()
 
     _APPLIED = True
 
@@ -903,6 +904,55 @@ def _apply_phase5_patches() -> None:
     ExchangeAgent.receive_message = exch_receive_message  # type: ignore[method-assign]
     OrderBook.get_l2_bid_data = get_l2_bid_data  # type: ignore[method-assign]
     OrderBook.get_l2_ask_data = get_l2_ask_data  # type: ignore[method-assign]
+
+
+def _apply_phase6_patches() -> None:
+    """Compile the Phase-5 hubs: Exchange receive, wakeup, place, NoiseTrader.act.
+
+    Fallbacks stay the Phase-5 Python methods for post-close / MarketHours /
+    anything this track does not send. Ledger rows are 9/10-tuples (see extract).
+    """
+    from abides_fork.agents import NoiseTrader, ScheduledAgent
+    from abides_markets.agents.exchange_agent import ExchangeAgent
+    from abides_markets.agents.trading_agent import TradingAgent
+    from abides_markets.messages.market import (
+        MarketClosePriceRequestMsg,
+        MarketHoursRequestMsg,
+    )
+    from abides_markets.messages.order import CancelOrderMsg, LimitOrderMsg, MarketOrderMsg
+    from abides_markets.messages.query import QuerySpreadMsg, QuerySpreadResponseMsg
+    from abides_markets.orders import Order, Side
+
+    try:
+        from fast_sim._hotpath import (
+            bind_agent_hotpath,
+            exch_receive_message,
+            noise_act,
+            place_limit_order,
+            sched_receive_message,
+            sched_wakeup,
+        )
+    except ImportError:
+        return
+
+    bind_agent_hotpath(
+        LimitOrderMsg,
+        QuerySpreadMsg,
+        QuerySpreadResponseMsg,
+        CancelOrderMsg,
+        MarketOrderMsg,
+        MarketHoursRequestMsg,
+        MarketClosePriceRequestMsg,
+        Side,
+        Order,
+        ExchangeAgent.receive_message,
+        TradingAgent.receive_message,
+    )
+    ExchangeAgent.receive_message = exch_receive_message  # type: ignore[method-assign]
+    ScheduledAgent.wakeup = sched_wakeup  # type: ignore[method-assign]
+    ScheduledAgent.receive_message = sched_receive_message  # type: ignore[method-assign]
+    TradingAgent.place_limit_order = place_limit_order  # type: ignore[method-assign]
+    NoiseTrader.act = noise_act  # type: ignore[method-assign]
 
 
 def slim_exchange(exchange: Any) -> None:

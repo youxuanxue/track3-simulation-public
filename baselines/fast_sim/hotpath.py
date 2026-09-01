@@ -357,17 +357,17 @@ def send_message(
     pending = getattr(self, "_pending_ledger", None)
     for lm in ledger_msgs:
         ord_ = getattr(lm, "order", None)
-        entry = {
-            "message_id": lm.message_id,
-            "src_id": sender_id,
-            "dst_id": recipient_id,
-            "t_send_ns": sent_time,
-            "t_recv_ns": deliver_at,
-            "latency_ns": latency_ns,
-            "msg_type": type(lm).__name__,
-            "order_id": getattr(ord_, "order_id", None),
-            "causal_parent": parent,
-        }
+        entry = (
+            lm.message_id,
+            sender_id,
+            recipient_id,
+            sent_time,
+            deliver_at,
+            latency_ns,
+            type(lm).__name__,
+            getattr(ord_, "order_id", None),
+            parent,
+        )
         ledger.append(entry)
         if pending is not None:
             pending[(lm.message_id, recipient_id)] = entry
@@ -424,18 +424,18 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
             seq = self._deliver_seq
             self._deliver_seq_by_key[(message.message_id, recipient_id)] = seq
             self._deliver_seq = seq + 1
-            entry = {
-                "message_id": message.message_id,
-                "src_id": recipient_id,
-                "dst_id": recipient_id,
-                "t_send_ns": None,
-                "t_recv_ns": self.current_time,
-                "latency_ns": 0,
-                "msg_type": "AGENT_WAKEUP",
-                "order_id": None,
-                "causal_parent": None,
-                "seq": seq,
-            }
+            entry = (
+                message.message_id,
+                recipient_id,
+                recipient_id,
+                None,
+                self.current_time,
+                0,
+                "AGENT_WAKEUP",
+                None,
+                None,
+                seq,
+            )
             self._msg_ledger.append(entry)
             if delivered is not None:
                 delivered.append(entry)
@@ -462,10 +462,21 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
                 self._deliver_seq += 1
                 if pending is not None:
                     entry = pending.pop((sub.message_id, recipient_id), None)
-                    if entry is not None:
-                        entry["seq"] = seq
-                        if delivered is not None:
-                            delivered.append(entry)
+                    if entry is not None and delivered is not None:
+                        delivered.append(
+                            (
+                                entry[0],
+                                entry[1],
+                                entry[2],
+                                entry[3],
+                                entry[4],
+                                entry[5],
+                                entry[6],
+                                entry[7],
+                                entry[8],
+                                seq,
+                            )
+                        )
                 agents[recipient_id].receive_message(
                     self.current_time, sender_id, sub
                 )

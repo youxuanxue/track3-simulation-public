@@ -1396,7 +1396,7 @@ cdef class NativeSim:
                 fmid = float(ask)
             else:
                 return
-            r_t = self._observe(self.now)
+            r_t = self.oracle.observe_price("ABM", self.now, self.rss[a.id], sigma_n=0)
             if a.sigma_n:
                 fundamental = int(round((<MT19937>self.mts[a.id]).normal(r_t, sqrt(a.sigma_n))))
             else:
@@ -1586,7 +1586,7 @@ cdef class NativeSim:
         self.pipeline = spec["pipeline_delay"]
         self.stp = spec["stp"]
         self.last_trade = spec["last_trade"]
-        self.oracle = None
+        self.oracle = spec.get("oracle")
         lat = spec["latency"]
         model = lat["model"]
         if model == "uniform":

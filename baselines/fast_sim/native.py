@@ -164,7 +164,7 @@ def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
         "n_agents": len(agents),
         "agents": roster,
         "latency": _latency_spec(config["agent_latency_model"]),
-        "oracle_spec": _oracle_spec(oracle),
+        "oracle": oracle,
     }
 
 

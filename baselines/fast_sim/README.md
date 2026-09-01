@@ -25,8 +25,9 @@ map. Step 11 is a from-scratch C kernel (`fast_sim._native`) that
 replaces `Kernel.run` for the four Track-3 agents + exchange; the
 hybrid stays as `FAST_SIM_NATIVE=0`. Step 12 moves latency
 `uniform` onto C `MT19937` and writes parquet from pyarrow
-Tables. ValueTrader `observe_price` stays on the Python oracle
-(the C OU/megashock port broke Family 1). No GPU.
+Tables. Step 13 ports ValueTrader `observe_price` (OU +
+megashock + scheduled jump) onto C after a lock-step proof
+against the Python oracle. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -443,7 +444,7 @@ still matches s001.
 Repeats: as06 459.3k–526.4k, gb_mega 447.5k–465.9k. Official B200
 worker will differ. Both units cleared 10%. Not 10×.
 
-## Championship step 12 (this change)
+## Championship step 12
 
 Eat leftover Python inside native. Latency `uniform` / `pareto`
 use C `MT19937` (`low + (high-low)*U`, `-log(1-U)*scale`,
@@ -468,9 +469,37 @@ Repeats: as06 462.9k–527.3k, gb_mega 441.3k–462.3k. Official B200
 worker will differ. Both units &lt;10% vs Step 11 (as06/gb_mega
 are log-normal, already on C). Not 10×.
 
+## Championship step 13 (this change)
+
+Bit-exact C `observe_price` only. No parquet/Arrow change. The
+Step 12 C port drifted (`stp_cancel_newest` 72018 vs 72048,
+`ra01` 35610 vs 36431) because (1) 2021-ns timestamps (~1.6e18)
+stored as `double` make `d = ts - pt` ≠ the integer subtraction
+Python does when both times are ints (ulp ~256 ns), (2) megashock
+sign was inverted vs `msv if randint(2)==0 else -msv`, (3)
+`int(exponential)` overflowed 32-bit C `int` — now `floor` of a
+positive draw, (4) C and Python must not share one RandomState.
+`observe_many` matched the Python observation sequence on those
+units (42/42 and 246/246) before `NATIVE_OBSERVE=1`. Native stays
+default. Hybrid fallback unchanged. No GPU.
+
+`mt19937_matches_numpy()` still True. `native_rng_matches_numpy()`
+True (now includes `normal` at OU scales). **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact. Hybrid s001 exact.
+
+| Scenario | Step 12 best | Step 13 best | vs Step 12 |
+|---|---|---|---|
+| `as06_throughput_fast` | 527,322 | **531,669** | **1.01×** |
+| `gb_mega_throughput` | 462,285 | **480,889** | **1.04×** |
+
+Repeats: as06 467.6k–531.7k, gb_mega 457.5k–480.9k. Official B200
+worker will differ. Both units &lt;10% vs Step 12 (as06/gb_mega
+have `jump_intensity=0`; C observe still drops the Python call).
+Not 10×.
+
 ## Remaining 10× path
 
-~527k / ~462k → ~1.4M / ~1.0M is still ~2.7–3×. Leftover Python
-is ValueTrader `observe_price` (OU / megashock / scheduled jump)
-and pyarrow table build at the end of the run. After-close stays
+~532k / ~481k → ~1.4M / ~1.0M is still ~2.6–2.9×. Leftover Python
+is pyarrow table build at the end of the run. After-close stays
 Step 5. GPU only for independent `simulate-batch`.

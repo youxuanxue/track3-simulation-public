@@ -8,8 +8,9 @@ model stay the pinned ABIDES objects. Speed comes from work that does **not**
 appear in the scored traces, a compiled (Cython) OrderBook / Kernel hot path,
 and the Phase 3–6 cuts of the Python tax each profiler pass named.
 Phase 6 compiled the remaining hubs and then hit diminishing returns
-(<10% on both throughput units); a 10× path is in the championship
-roadmap below, not more f-string patches.
+(<10% on both throughput units). Championship step 1 replaces the
+Python tuple heap with a C `EventQueue` (same ABIDES key); leftover
+agents stay Python. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 

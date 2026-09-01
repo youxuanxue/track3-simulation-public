@@ -169,9 +169,27 @@ def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def as_pandas(obj: Any) -> Any:
-    """Validate / compare path only — timed ``simulate`` writes Arrow tables."""
+    """Validate / compare path only — timed ``simulate`` writes Arrow tables.
+
+    Default ``Table.to_pandas()`` promotes nullable int64 to float64 and
+    rounds nanosecond timestamps. Map those columns to pandas ``Int64``.
+    """
     if obj is None:
         return obj
+    try:
+        import pyarrow as pa
+        import pandas as pd
+    except ImportError:
+        pa = None
+        pd = None
+    if pa is not None and isinstance(obj, pa.Table):
+        return obj.to_pandas(
+            types_mapper={
+                pa.int64(): pd.Int64Dtype(),
+                pa.int32(): pd.Int32Dtype(),
+                pa.string(): pd.StringDtype(),
+            }
+        )
     to_pd = getattr(obj, "to_pandas", None)
     if callable(to_pd) and not hasattr(obj, "iloc"):
         return to_pd()

@@ -3,12 +3,15 @@
 This document describes the performance baselines that define the admissibility and ranking
 thresholds for Track 3 submissions. The canonical timing protocol is `throughput/timer.py`.
 
-> **The throughput figures below have not been re-measured on the fleet.** They were written on
-> 2026-06-23, when this repository was created and the benchmark hardware was still described as
-> "4× AMD EPYC vCPU" with an unnamed GPU. The hardware in §3 was measured on 2026-08-20 and the
-> figures were not: they predate both the B200 hosts and the gVisor sandbox every ranked run now
-> executes under. Read every events/sec number here as **indicative of scale, not as a measurement
-> of this fleet** — including the ABIDES floor. Re-measurement is tracked in
+> **No throughput figure on this page was measured on the evaluation fleet, and the ~65,000
+> events/sec ABIDES baseline is withdrawn as a target.** The 2026-06-23 figures were written when
+> this repository was created and the benchmark hardware was still described as "4× AMD EPYC vCPU"
+> with an unnamed GPU; they predate both the B200 hosts and the gVisor sandbox every ranked run now
+> executes under. The hardware in §3 was measured on 2026-08-20 — the throughput numbers were not.
+> What replaces 65,000 is the one figure this repository can reproduce from its own files: the 65
+> shipped reference runs, **geometric mean 13,793 events/sec** (range 3,471–18,046), on hardware
+> that is not recorded. See §1 for the derivation and §3 for what the ranking floor is actually
+> compared against — it is neither number. A fleet baseline is coming; it is tracked in
 > [#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42).
 
 ---
@@ -37,29 +40,53 @@ per-event overhead.
 
 ### Throughput
 
-| Hardware | Observed throughput | Measured on this fleet? |
+| Quantity | events/sec | Provenance |
 |---|---|---|
-| 4 vCPU (x86-64), 16 GiB RAM, GPU unused (CPU-only baseline) | ~50,000–80,000 events/sec | **No** — 2026-06-23, hardware since replaced |
-| Geometric mean over public regression scenarios | ~65,000 events/sec | **No** — same provenance |
+| Geometric mean over the 65 public reference runs | **13,793** (range 3,471–18,046, median 14,302) | **Measured**, and reproducible from this repository — see below. Hardware not recorded. |
+| 4 vCPU (x86-64), 16 GiB RAM, GPU unused (CPU-only baseline) | ~50,000–80,000 | **Not measured on this fleet.** Written 2026-06-23, hardware since replaced. |
 
-This document has named `timer.py --runs 5 --discard-warmup` as the protocol for these figures
-since 2026-06-23, which is when the table was written. No run of it on the fleet is recorded, so
-what the numbers describe is the hardware this repository described at the time — **not** the B200
-hosts in §3, and **not** the gVisor sandbox every ranked run executes under.
+The wide range in the second row (50 k–80 k) was attributed to scenario complexity: scenarios with
+many active agents and complex order-book states run slower than sparse, low-agent-count scenarios.
+That effect is real and visible in the measured row too — the 5.2× spread from 3,471 to 18,046
+across the 65 reference runs is the same phenomenon.
 
-The wide range (50 k–80 k) reflects scenario complexity: scenarios with many active agents and
-complex order-book states run slower than sparse, low-agent-count scenarios.
+**A row reading "geometric mean over public regression scenarios: ~65,000 events/sec" used to sit
+in this table. It is withdrawn.** It named exactly the quantity the first row now reports, and the
+repository's own shipped data puts that quantity 4.7× lower. No run producing the 65,000 figure is
+recorded anywhere in this repository; it was written on 2026-06-23, against hardware this
+repository no longer runs on, and it is the exact arithmetic midpoint of the 50 k–80 k row above.
+**Do not treat 65,000 as a target, a floor, or a number to beat.** The constant
+`ABIDES_BASELINE_EVENTS_PER_SEC` in
+`qfbench2_track_simulation/domain.py` still carries the value: it is retained there as a pinned
+historical input to the clip-ceiling derivation, is read by no scoring path, and is documented as
+withdrawn.
 
-**The reference traces shipped in this repository point one way.** Each of the 65 public units
-carries an `events.json` written by `baselines/abides_fork/simulate.py` from the pinned ABIDES fork
-— the same baseline this table describes. Their measured `events_per_sec` runs from **3,471 to
-18,046, geometric mean 13,793**: about **4.7× below** the 65,000 figure above.
+**How the measured row is derived.** Each of the 65 public units carries an `events.json` written
+by `baselines/abides_fork/simulate.py` from the pinned ABIDES fork — the same baseline this section
+describes. Reproduce it from a clone:
 
-The hardware those runs used is not recorded and `wall_clock_sec` there covers the simulation loop
-rather than the whole container, so they do not replace a `timer.py` run on the fleet. They are
-also not explained by the sandbox: per §3 a Python event loop is nearly free under gVisor
-(allocation 0.3%, heap −0.9%, i.e. noise). Treat 65,000 as the number least likely to be right, and
-see [#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42).
+```bash
+python - <<'PY'
+import glob, json, math, statistics
+r = [json.load(open(p))["events_per_sec"] for p in sorted(glob.glob("units/*/events.json"))]
+print(len(r), min(r), max(r), math.exp(sum(map(math.log, r)) / len(r)), statistics.median(r))
+PY
+# 65 3471.4630392468134 18046.378079211532 13792.95705430894 14302.424699152642
+```
+
+**What the measured row is not.** The hardware those runs used is not recorded, and their
+`wall_clock_sec` covers the simulation loop rather than the whole container, so 13,793 is not a
+fleet measurement either — it is the only throughput number in this repository you can reproduce
+from what ships in it. It is also not explained away by the sandbox: per §3 a Python event loop is
+nearly free under gVisor (allocation 0.3%, heap −0.9%, i.e. noise).
+
+**No fleet-measured baseline exists yet.** `timer.py --runs 5 --discard-warmup` has been named here
+as the protocol since 2026-06-23, but no run of it on the B200 hosts, under the gVisor sandbox every
+ranked run executes in, is recorded. Until one is — tracked in
+[#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42) — the honest statement is
+that the fleet baseline is unknown and a measured one is coming. Measure your own machine
+(`throughput/timer.py`) and improve on that; ranking is relative to other submissions, not to any
+number on this page.
 
 ### The `simulate` adapter
 
@@ -242,23 +269,33 @@ The `simulate` CLI entry point in compliant submissions is expected to:
 ## 3. Performance Reference Points
 
 Ranking is by **raw median `events_per_sec`** on the sealed throughput-scale scenarios,
-descending — there is no normalized-score transform. The ABIDES baseline is the throughput
-floor: a submission whose median throughput does not exceed it is admissible but unranked
-(`t3.throughput_nonimproving`). The vectorized reference is an internal performance reference
-point only and gates nothing.
+descending — there is no normalized-score transform. The `t3.throughput_nonimproving` label marks a
+submission that did not beat its own units' recorded reference rate; it is admissible but unranked.
+That comparison is per-unit and is defined below — **no number in the table that follows is the
+floor.** The vectorized reference is an internal performance reference point only and gates nothing.
 
-| Configuration | events/sec (geomean) | Provenance | Role |
+| Configuration | events/sec | Provenance | Role |
 |---|---|---|---|
-| **Unmodified ABIDES baseline** | ~65,000 | **Not measured on this fleet.** Written 2026-06-23 against the hardware this repository described at the time. | Ranking floor (`t3.throughput_nonimproving` at or below) |
-| **Unmodified ABIDES baseline** | 13,793 | **Measured**, from the `events_per_sec` in the 65 shipped public `units/*/events.json`, all written by the pinned baseline. Range 3,471–18,046. Hardware not recorded, and `wall_clock_sec` there covers the simulation loop rather than the whole container. | Not a threshold — the only reproducible baseline number in this repository |
+| **Unmodified ABIDES baseline** | 13,793 geomean (range 3,471–18,046, median 14,302) | **Measured**, from the `events_per_sec` in the 65 shipped public `units/*/events.json`, all written by the pinned baseline. Hardware not recorded, and `wall_clock_sec` there covers the simulation loop rather than the whole container. | Not a threshold — the only reproducible baseline number in this repository |
+| **Unmodified ABIDES baseline** | ~65,000 — **withdrawn, see below** | **No measurement recorded.** Written 2026-06-23 against the hardware this repository described at the time. | **None.** Not a target, not a floor, not read by any scoring path |
 | **Vectorized reference** | ~400,000 | **Not measured on this fleet**, same 2026-06-23 provenance. | Internal reference (not a gate) |
 
-**Read the two baseline rows together, and treat neither as a target.** They disagree by about
-4.7×, on the same engine, and the gap is not explained by the sandbox (per §3 a Python event loop
-is nearly free under gVisor: allocation 0.3%, heap −0.9%, i.e. noise). The 65,000 figure is the one
-least likely to be right. Re-measurement is tracked in
-[#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42); until it lands, no
-number on this page is a measurement of the fleet your submission will be scored on.
+**65,000 is withdrawn as a target.** This table previously gave it the role "ranking floor
+(`t3.throughput_nonimproving` at or below)", which made it the figure to beat. It was never run on
+the B200 workers or under gVisor, and this repository's own shipped reference runs sit
+about 4.7× below it on the same engine — a gap the sandbox does not explain (per §3 a Python event
+loop is nearly free under gVisor: allocation 0.3%, heap −0.9%, i.e. noise). Withdrawing it does not
+change any score: the value survives only as `ABIDES_BASELINE_EVENTS_PER_SEC` in
+`qfbench2_track_simulation/domain.py`, a pinned historical input to the clip-ceiling derivation that
+no scoring path reads.
+
+**There is no fleet-measured baseline yet, and 13,793 is not one.** 13,793 is reproducible from the
+files in this repository (§1 shows the command) on hardware that is not recorded. A `timer.py` run
+on the evaluation fleet is tracked in
+[#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42). Until it lands, treat
+every events/sec figure on this page as scale, not as a measurement of the machine your submission
+will be scored on — and tune against your own measured baseline, since ranking is relative to other
+submissions.
 
 A row reading "typical competitive submission: 150,000–600,000 events/sec" used to sit in this
 table. It was removed rather than re-qualified: no such range was ever measured, there were no
@@ -269,7 +306,7 @@ towards a number that means nothing.
 `t3.throughput_nonimproving` label is decided by comparing the median of your throughput units'
 `events_per_sec` against the median of the **`events_per_sec` recorded in the reference
 `events.json` of those same units**. Those are the frozen numbers the pinned baseline emitted when
-the reference traces were generated — for the public units, the 3,471–18,046 range in the second
+the reference traces were generated — for the public units, the 3,471–18,046 range in the first
 row above. The floor is not re-measured on the evaluation box, and it is not read from any table
 on this page.
 
@@ -373,8 +410,8 @@ These are the canonical `FailureLabel` values (see
 
 | Condition | Label | Ranked? |
 |---|---|---|
-| events/sec > ABIDES baseline geomean | (no label; normal) | Yes |
-| events/sec ≤ ABIDES baseline geomean | `t3.throughput_nonimproving` | No — admissible but unranked |
+| events/sec above the recorded reference rate (see §3, "What the floor is actually compared against") | (no label; normal) | Yes |
+| events/sec at or below that recorded reference rate | `t3.throughput_nonimproving` | No — admissible but unranked |
 | Output dir/trace/`events.json` missing or malformed | `t3.parse_error` (+ `shared.schema.invalid_output`) | No — inadmissible |
 | Semantic equality check fails (Tier A fill sequence or Tier B proximity) | `t3.semantic_regression_fail` | No — inadmissible |
 | Stylized-fact ceiling breached (Family 5) | `t3.stylized_fact_breach` | No — inadmissible |

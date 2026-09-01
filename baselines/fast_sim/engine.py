@@ -16,12 +16,14 @@ from fast_sim.extract import extract_message_trace_from_state, extract_trace_fro
 from fast_sim.optimize import HeapPQueue, apply_runtime_patches, slim_agents, slim_exchange
 
 try:
-    from fast_sim._hotpath import EventQueue
+    from fast_sim._hotpath import CLedger, CTrace, EventQueue
 except ImportError:
     try:
         from fast_sim.hotpath import EventQueue
     except ImportError:
         EventQueue = HeapPQueue
+    CLedger = ColumnLedger
+    CTrace = ColumnTrace
 
 
 def reset_abides_counters() -> None:
@@ -68,8 +70,8 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     )
     kernel.messages = EventQueue()
     kernel.show_trace_messages = False
-    kernel._col_ledger = ColumnLedger()
-    kernel._col_trace = ColumnTrace()
+    kernel._col_ledger = CLedger()
+    kernel._col_trace = CTrace()
     kernel._pending_ledger = {}
     kernel._delivered = []
 

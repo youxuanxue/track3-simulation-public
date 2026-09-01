@@ -5,6 +5,7 @@ from copy import deepcopy as _real_deepcopy
 from libc.math cimport exp, log, sqrt
 from libc.stdint cimport uint32_t
 from libc.stdlib cimport free, malloc, realloc
+from libc.string cimport memcpy, memmove
 from cpython.object cimport PyObject
 from cpython.ref cimport Py_DECREF, Py_INCREF, Py_XDECREF
 
@@ -322,6 +323,732 @@ cdef class EventQueue:
         da, sid, rid, kind, payload, mid = self.pop()
         return (da, (sid, rid, payload))
 
+
+# --- C order / C price level / C trace+ledger (step 9) ---
+
+cdef enum:
+    EV_SUBMIT = 0
+    EV_ACCEPT = 1
+    EV_EXEC = 2
+    EV_CANCEL = 3
+    EV_REPLACE = 4
+    FL_HIDDEN = 1
+    FL_PTC = 2
+    FL_INSERT_ID = 4
+    FL_POST_ONLY = 8
+    LF_SEND_NA = 1
+    LF_OID_NA = 2
+    LF_PARENT_NA = 4
+
+cdef tuple _MT_NAMES = (
+    "AGENT_WAKEUP",
+    "OrderExecutedMsg",
+    "OrderAcceptedMsg",
+    "OrderCancelledMsg",
+    "LimitOrderMsg",
+    "CancelOrderMsg",
+    "QuerySpreadMsg",
+    "QuerySpreadResponseMsg",
+    "MarketOrderMsg",
+    "MarketHoursRequestMsg",
+    "MarketClosePriceRequestMsg",
+    "MarketHoursMsg",
+    "MarketClosePriceMsg",
+    "MarketClosedMsg",
+)
+
+cdef tuple _EV_NAMES = (
+    "ORDER_FILLED",
+    "ORDER_ACCEPTED",
+    "ORDER_EXECUTED",
+    "ORDER_CANCELLED",
+    "ORDER_REPLACED",
+)
+
+
+cdef inline int _mtype_code(object name) noexcept:
+    if name == "OrderExecutedMsg":
+        return 1
+    if name == "LimitOrderMsg":
+        return 4
+    if name == "AGENT_WAKEUP":
+        return 0
+    if name == "OrderAcceptedMsg":
+        return 2
+    if name == "QuerySpreadMsg":
+        return 6
+    if name == "QuerySpreadResponseMsg":
+        return 7
+    if name == "CancelOrderMsg":
+        return 5
+    if name == "OrderCancelledMsg":
+        return 3
+    if name == "MarketOrderMsg":
+        return 8
+    if name == "MarketHoursRequestMsg":
+        return 9
+    if name == "MarketClosePriceRequestMsg":
+        return 10
+    if name == "MarketHoursMsg":
+        return 11
+    if name == "MarketClosePriceMsg":
+        return 12
+    if name == "MarketClosedMsg":
+        return 13
+    return 0
+
+
+cdef struct COrder:
+    long long time_placed
+    long long order_id
+    int agent_id
+    int quantity
+    int limit_price
+    int fill_price
+    unsigned char side
+    unsigned char flags
+
+
+cdef struct LRow:
+    long long mid
+    long long t_send
+    long long t_recv
+    long long lat
+    long long oid
+    long long parent
+    int src
+    int dst
+    int mtype
+    int seq
+    unsigned char flags
+
+
+cdef class CTrace:
+    """Order + quote columns in C arrays. pandas only in to_dataframe()."""
+
+    cdef long long *ot
+    cdef int *oev
+    cdef int *oaid
+    cdef unsigned char *oside
+    cdef int *opx
+    cdef int *osz
+    cdef int *ooid
+    cdef Py_ssize_t n_o, cap_o
+    cdef long long *qt
+    cdef int *qaid
+    cdef unsigned char *qside
+    cdef int *qpx
+    cdef int *qsz
+    cdef Py_ssize_t n_q, cap_q
+
+    def __cinit__(self):
+        self.ot = NULL
+        self.oev = NULL
+        self.oaid = NULL
+        self.oside = NULL
+        self.opx = NULL
+        self.osz = NULL
+        self.ooid = NULL
+        self.qt = NULL
+        self.qaid = NULL
+        self.qside = NULL
+        self.qpx = NULL
+        self.qsz = NULL
+        self.n_o = 0
+        self.cap_o = 0
+        self.n_q = 0
+        self.cap_q = 0
+
+    def __dealloc__(self):
+        if self.ot != NULL:
+            free(self.ot)
+        if self.oev != NULL:
+            free(self.oev)
+        if self.oaid != NULL:
+            free(self.oaid)
+        if self.oside != NULL:
+            free(self.oside)
+        if self.opx != NULL:
+            free(self.opx)
+        if self.osz != NULL:
+            free(self.osz)
+        if self.ooid != NULL:
+            free(self.ooid)
+        if self.qt != NULL:
+            free(self.qt)
+        if self.qaid != NULL:
+            free(self.qaid)
+        if self.qside != NULL:
+            free(self.qside)
+        if self.qpx != NULL:
+            free(self.qpx)
+        if self.qsz != NULL:
+            free(self.qsz)
+
+    def __bool__(self):
+        return self.n_o != 0 or self.n_q != 0
+
+    cdef void _grow_o(self) except *:
+        cdef Py_ssize_t newcap = 64 if self.cap_o == 0 else self.cap_o * 2
+        cdef long long *ot = <long long *>realloc(self.ot, newcap * sizeof(long long))
+        cdef int *oev = <int *>realloc(self.oev, newcap * sizeof(int))
+        cdef int *oaid = <int *>realloc(self.oaid, newcap * sizeof(int))
+        cdef unsigned char *oside = <unsigned char *>realloc(
+            self.oside, newcap * sizeof(unsigned char)
+        )
+        cdef int *opx = <int *>realloc(self.opx, newcap * sizeof(int))
+        cdef int *osz = <int *>realloc(self.osz, newcap * sizeof(int))
+        cdef int *ooid = <int *>realloc(self.ooid, newcap * sizeof(int))
+        if (
+            ot == NULL or oev == NULL or oaid == NULL or oside == NULL
+            or opx == NULL or osz == NULL or ooid == NULL
+        ):
+            raise MemoryError()
+        self.ot = ot
+        self.oev = oev
+        self.oaid = oaid
+        self.oside = oside
+        self.opx = opx
+        self.osz = osz
+        self.ooid = ooid
+        self.cap_o = newcap
+
+    cdef void _grow_q(self) except *:
+        cdef Py_ssize_t newcap = 64 if self.cap_q == 0 else self.cap_q * 2
+        cdef long long *qt = <long long *>realloc(self.qt, newcap * sizeof(long long))
+        cdef int *qaid = <int *>realloc(self.qaid, newcap * sizeof(int))
+        cdef unsigned char *qside = <unsigned char *>realloc(
+            self.qside, newcap * sizeof(unsigned char)
+        )
+        cdef int *qpx = <int *>realloc(self.qpx, newcap * sizeof(int))
+        cdef int *qsz = <int *>realloc(self.qsz, newcap * sizeof(int))
+        if qt == NULL or qaid == NULL or qside == NULL or qpx == NULL or qsz == NULL:
+            raise MemoryError()
+        self.qt = qt
+        self.qaid = qaid
+        self.qside = qside
+        self.qpx = qpx
+        self.qsz = qsz
+        self.cap_q = newcap
+
+    cdef void add_order_c(self, long long t, int ev, int aid, unsigned char is_bid, int px, int sz, int oid) except *:
+        cdef Py_ssize_t i
+        if self.n_o >= self.cap_o:
+            self._grow_o()
+        i = self.n_o
+        self.ot[i] = t
+        self.oev[i] = ev
+        self.oaid[i] = aid
+        self.oside[i] = is_bid
+        self.opx[i] = px
+        self.osz[i] = sz
+        self.ooid[i] = oid
+        self.n_o = i + 1
+
+    cdef void add_quote_c(self, long long t, unsigned char is_bid, int px, int sz, int aid) except *:
+        cdef Py_ssize_t i
+        if self.n_q >= self.cap_q:
+            self._grow_q()
+        i = self.n_q
+        self.qt[i] = t
+        self.qaid[i] = aid
+        self.qside[i] = is_bid
+        self.qpx[i] = px
+        self.qsz[i] = sz
+        self.n_q = i + 1
+
+    def add_order(self, t_ns, event_type, agent_id, side, price, size, order_id):
+        cdef int ev
+        if event_type == "ORDER_SUBMITTED":
+            ev = EV_SUBMIT
+        elif event_type == "ORDER_ACCEPTED":
+            ev = EV_ACCEPT
+        elif event_type == "ORDER_EXECUTED":
+            ev = EV_EXEC
+        elif event_type == "ORDER_CANCELLED":
+            ev = EV_CANCEL
+        else:
+            ev = EV_REPLACE
+        cdef unsigned char is_bid = 1 if (side is _BID or side == "BID") else 0
+        self.add_order_c(t_ns, ev, agent_id, is_bid, price, size, order_id)
+
+    def add_quote(self, t_ns, is_bid, price, size, agent_id):
+        self.add_quote_c(t_ns, 1 if is_bid else 0, price, size, agent_id)
+
+    def to_dataframe(self):
+        from fast_sim.extract import _empty_trace, _stable_lexsort
+        from abides_fork.trace import _TRACE_DTYPES
+        import numpy as np
+        import pandas as pd
+
+        cdef Py_ssize_t i, n_order, n_quote, n, j
+        n_order = self.n_o
+        n_quote = self.n_q
+        if n_order == 0 and n_quote == 0:
+            return _empty_trace()
+
+        if n_order:
+            t_arr = np.empty(n_order, dtype=np.int64)
+            aid_arr = np.empty(n_order, dtype=np.int64)
+            oid_arr = np.empty(n_order, dtype=np.int64)
+            px_arr = np.empty(n_order, dtype=np.int64)
+            sz_arr = np.empty(n_order, dtype=np.int64)
+            ev_arr = np.empty(n_order, dtype=np.int32)
+            side_b = np.empty(n_order, dtype=np.uint8)
+            for i in range(n_order):
+                t_arr[i] = self.ot[i]
+                aid_arr[i] = self.oaid[i]
+                oid_arr[i] = self.ooid[i]
+                px_arr[i] = self.opx[i]
+                sz_arr[i] = self.osz[i]
+                ev_arr[i] = self.oev[i]
+                side_b[i] = self.oside[i]
+            order_idx = np.argsort(t_arr, kind="stable")
+            t_arr = t_arr[order_idx]
+            aid_arr = aid_arr[order_idx]
+            oid_arr = oid_arr[order_idx]
+            px_arr = px_arr[order_idx]
+            sz_arr = sz_arr[order_idx]
+            ev_arr = ev_arr[order_idx]
+            side_b = side_b[order_idx]
+            is_exec = ev_arr == EV_EXEC
+            last_exec = {}
+            for pos in np.nonzero(is_exec)[0]:
+                last_exec[int(oid_arr[pos])] = int(pos)
+            msg = np.empty(n_order, dtype=object)
+            side_str = np.empty(n_order, dtype=object)
+            ev_py = ev_arr
+            oid_py = oid_arr
+            sb_py = side_b
+            for i in range(n_order):
+                ev = int(ev_py[i])
+                if ev == EV_EXEC:
+                    msg[i] = (
+                        "ORDER_FILLED"
+                        if last_exec.get(int(oid_py[i])) == i
+                        else "PARTIAL_FILL"
+                    )
+                elif ev == EV_SUBMIT:
+                    msg[i] = "ORDER_SUBMITTED"
+                elif ev == EV_ACCEPT:
+                    msg[i] = "ORDER_ACCEPTED"
+                elif ev == EV_CANCEL:
+                    msg[i] = "ORDER_CANCELLED"
+                else:
+                    msg[i] = "ORDER_REPLACED"
+                side_str[i] = "BID" if sb_py[i] else "ASK"
+        else:
+            t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg = side_str = None
+
+        if n_quote:
+            last_i = {}
+            first_rank = {}
+            rank = 0
+            for i in range(n_quote):
+                key = (self.qt[i], self.qside[i])
+                if key not in first_rank:
+                    first_rank[key] = rank
+                    rank += 1
+                last_i[key] = i
+            kept = sorted(last_i.items(), key=lambda kv: first_rank[kv[0]])
+            n_quote = len(kept)
+            q_t = np.empty(n_quote, dtype=np.int64)
+            q_aid = np.empty(n_quote, dtype=np.int64)
+            q_side = np.empty(n_quote, dtype=object)
+            q_px = np.empty(n_quote, dtype=np.int64)
+            q_sz = np.empty(n_quote, dtype=np.int64)
+            q_oid = np.full(n_quote, -1, dtype=np.int64)
+            q_msg = np.empty(n_quote, dtype=object)
+            for j, (_, i) in enumerate(kept):
+                q_t[j] = self.qt[i]
+                q_aid[j] = self.qaid[i]
+                q_side[j] = "BID" if self.qside[i] else "ASK"
+                q_px[j] = self.qpx[i]
+                q_sz[j] = self.qsz[i]
+                q_msg[j] = "QUOTE_UPDATE"
+        else:
+            n_quote = 0
+
+        n = n_order + n_quote
+        t_all = np.empty(n, dtype=np.int64)
+        aid_all = np.empty(n, dtype=np.int64)
+        msg_all = np.empty(n, dtype=object)
+        side_all = np.empty(n, dtype=object)
+        px_all = np.empty(n, dtype=np.int64)
+        sz_all = np.empty(n, dtype=np.int64)
+        oid_all = np.empty(n, dtype=np.int64)
+        if n_order:
+            t_all[:n_order] = t_arr
+            aid_all[:n_order] = aid_arr
+            msg_all[:n_order] = msg
+            side_all[:n_order] = side_str
+            px_all[:n_order] = px_arr
+            sz_all[:n_order] = sz_arr
+            oid_all[:n_order] = oid_arr
+        if n_quote:
+            t_all[n_order:] = q_t
+            aid_all[n_order:] = q_aid
+            msg_all[n_order:] = q_msg
+            side_all[n_order:] = q_side
+            px_all[n_order:] = q_px
+            sz_all[n_order:] = q_sz
+            oid_all[n_order:] = q_oid
+        idx = _stable_lexsort(t_all, oid_all)
+        df = pd.DataFrame(
+            {
+                "t_ns": t_all[idx],
+                "agent_id": aid_all[idx],
+                "msg_type": msg_all[idx],
+                "side": side_all[idx],
+                "price": px_all[idx],
+                "size": sz_all[idx],
+                "order_id": oid_all[idx],
+            }
+        )
+        return df.astype(_TRACE_DTYPES, copy=False)
+
+
+cdef class CLedger:
+    """Delivered-message columns in a C struct array. pandas only at write."""
+
+    cdef LRow *rows
+    cdef Py_ssize_t n
+    cdef Py_ssize_t cap
+
+    def __cinit__(self):
+        self.rows = NULL
+        self.n = 0
+        self.cap = 0
+
+    def __dealloc__(self):
+        if self.rows != NULL:
+            free(self.rows)
+            self.rows = NULL
+
+    cdef void _grow(self) except *:
+        cdef Py_ssize_t newcap = 64 if self.cap == 0 else self.cap * 2
+        cdef LRow *nb = <LRow *>realloc(self.rows, newcap * sizeof(LRow))
+        if nb == NULL:
+            raise MemoryError()
+        self.rows = nb
+        self.cap = newcap
+
+    def append(
+        self,
+        mid,
+        src,
+        dst,
+        t_send,
+        t_recv,
+        lat,
+        mtype,
+        oid,
+        parent,
+        seq=-1,
+    ):
+        cdef Py_ssize_t i
+        cdef LRow *r
+        if self.n >= self.cap:
+            self._grow()
+        i = self.n
+        r = &self.rows[i]
+        r.mid = mid
+        r.src = src
+        r.dst = dst
+        r.t_recv = t_recv
+        r.lat = lat
+        r.mtype = _mtype_code(mtype)
+        r.seq = seq
+        r.flags = 0
+        if t_send is None:
+            r.t_send = 0
+            r.flags |= LF_SEND_NA
+        else:
+            r.t_send = t_send
+        if oid is None:
+            r.oid = 0
+            r.flags |= LF_OID_NA
+        else:
+            r.oid = oid
+        if parent is None:
+            r.parent = 0
+            r.flags |= LF_PARENT_NA
+        else:
+            r.parent = parent
+        self.n = i + 1
+        return i
+
+    def set_seq(self, idx, seq):
+        self.rows[idx].seq = seq
+
+    def to_dataframe(self):
+        from fast_sim.extract import _empty_msg, _nullable_int64
+        from abides_fork.trace import _MSG_DTYPES
+        import numpy as np
+        import pandas as pd
+
+        cdef Py_ssize_t i, n
+        cdef LRow *r
+        n = self.n
+        if n == 0:
+            return _empty_msg()
+        seq = np.empty(n, dtype=np.int64)
+        for i in range(n):
+            seq[i] = self.rows[i].seq
+        keep = seq >= 0
+        if not keep.any():
+            return _empty_msg()
+        mid = np.empty(n, dtype=np.int64)
+        src = np.empty(n, dtype=np.int32)
+        dst = np.empty(n, dtype=np.int32)
+        t_recv = np.empty(n, dtype=np.int64)
+        lat = np.empty(n, dtype=np.int64)
+        t_send = np.empty(n, dtype=np.int64)
+        t_send_na = np.zeros(n, dtype=np.bool_)
+        oid = np.empty(n, dtype=np.int64)
+        oid_na = np.zeros(n, dtype=np.bool_)
+        parent = np.empty(n, dtype=np.int64)
+        parent_na = np.zeros(n, dtype=np.bool_)
+        mtype = np.empty(n, dtype=object)
+        names = _MT_NAMES
+        for i in range(n):
+            r = &self.rows[i]
+            mid[i] = r.mid
+            src[i] = r.src
+            dst[i] = r.dst
+            t_recv[i] = r.t_recv
+            lat[i] = r.lat
+            t_send[i] = r.t_send
+            oid[i] = r.oid
+            parent[i] = r.parent
+            t_send_na[i] = bool(r.flags & LF_SEND_NA)
+            oid_na[i] = bool(r.flags & LF_OID_NA)
+            parent_na[i] = bool(r.flags & LF_PARENT_NA)
+            mt = r.mtype
+            mtype[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
+        order = np.argsort(seq[keep], kind="stable")
+        mid = mid[keep][order]
+        src = src[keep][order]
+        dst = dst[keep][order]
+        t_recv = t_recv[keep][order]
+        lat = lat[keep][order]
+        mtype = mtype[keep][order]
+        seq_out = seq[keep][order]
+        t_send = t_send[keep][order]
+        t_send_na = t_send_na[keep][order]
+        oid = oid[keep][order]
+        oid_na = oid_na[keep][order]
+        parent = parent[keep][order]
+        parent_na = parent_na[keep][order]
+        df = pd.DataFrame(
+            {
+                "seq": seq_out,
+                "t_recv_ns": t_recv,
+                "t_send_ns": _nullable_int64(t_send, t_send_na),
+                "latency_ns": lat,
+                "src_id": src,
+                "dst_id": dst,
+                "message_id": mid,
+                "msg_type": mtype,
+                "order_id": _nullable_int64(oid, oid_na),
+                "causal_parent": _nullable_int64(parent, parent_na),
+            }
+        )
+        return df.astype(_MSG_DTYPES, copy=False)
+
+
+cdef int _co_grow(COrder **buf, Py_ssize_t *cap, Py_ssize_t need) except -1:
+    cdef Py_ssize_t newcap
+    cdef COrder *nb
+    if need <= cap[0]:
+        return 0
+    newcap = 4 if cap[0] == 0 else cap[0] * 2
+    while newcap < need:
+        newcap *= 2
+    nb = <COrder *>realloc(buf[0], newcap * sizeof(COrder))
+    if nb == NULL:
+        raise MemoryError()
+    buf[0] = nb
+    cap[0] = newcap
+    return 0
+
+
+cdef class CPriceLevel:
+    """One price: COrder arrays, no Python LimitOrder."""
+
+    cdef public int price
+    cdef public int _visible_qty
+    cdef unsigned char side
+    cdef COrder *vis
+    cdef COrder *hid
+    cdef Py_ssize_t n_vis, cap_vis, n_hid, cap_hid
+
+    def __cinit__(self):
+        self.vis = NULL
+        self.hid = NULL
+        self.n_vis = 0
+        self.cap_vis = 0
+        self.n_hid = 0
+        self.cap_hid = 0
+        self._visible_qty = 0
+        self.price = 0
+        self.side = 0
+
+    def __dealloc__(self):
+        if self.vis != NULL:
+            free(self.vis)
+            self.vis = NULL
+        if self.hid != NULL:
+            free(self.hid)
+            self.hid = NULL
+
+
+cdef CPriceLevel _new_clevel(COrder *order):
+    cdef CPriceLevel level = CPriceLevel.__new__(CPriceLevel)
+    level.price = order.limit_price
+    level.side = order.side
+    level._visible_qty = 0
+    if order.flags & FL_HIDDEN:
+        _co_grow(&level.hid, &level.cap_hid, 1)
+        level.hid[0] = order[0]
+        level.n_hid = 1
+    else:
+        _co_grow(&level.vis, &level.cap_vis, 1)
+        level.vis[0] = order[0]
+        level.n_vis = 1
+        level._visible_qty = order.quantity
+    return level
+
+
+cdef void _c_vis_add(CPriceLevel lv, COrder *o) except *:
+    cdef Py_ssize_t i, n
+    if o.flags & FL_HIDDEN:
+        _co_grow(&lv.hid, &lv.cap_hid, lv.n_hid + 1)
+        lv.hid[lv.n_hid] = o[0]
+        lv.n_hid += 1
+        return
+    if o.flags & FL_INSERT_ID:
+        _co_grow(&lv.vis, &lv.cap_vis, lv.n_vis + 1)
+        n = lv.n_vis
+        i = 0
+        while i < n and lv.vis[i].order_id <= o.order_id:
+            i += 1
+        if i < n:
+            memmove(&lv.vis[i + 1], &lv.vis[i], (n - i) * sizeof(COrder))
+        lv.vis[i] = o[0]
+        lv.n_vis = n + 1
+    else:
+        _co_grow(&lv.vis, &lv.cap_vis, lv.n_vis + 1)
+        lv.vis[lv.n_vis] = o[0]
+        lv.n_vis += 1
+    lv._visible_qty = lv._visible_qty + o.quantity
+
+
+cdef inline bint _c_level_empty(CPriceLevel lv) noexcept:
+    return lv.n_vis == 0 and lv.n_hid == 0
+
+
+cdef inline bint _c_is_match(CPriceLevel lv, COrder *order, bint is_bid) noexcept:
+    if is_bid:
+        if order.limit_price < lv.price:
+            return 0
+    elif order.limit_price > lv.price:
+        return 0
+    if (order.flags & FL_POST_ONLY) and lv._visible_qty == 0:
+        return 0
+    return 1
+
+
+cdef inline COrder *_c_peek(CPriceLevel lv) noexcept:
+    if lv.n_vis:
+        return &lv.vis[0]
+    if lv.n_hid:
+        return &lv.hid[0]
+    return NULL
+
+
+cdef int _c_pop(CPriceLevel lv, COrder *out) noexcept:
+    if lv.n_vis:
+        out[0] = lv.vis[0]
+        lv._visible_qty = lv._visible_qty - lv.vis[0].quantity
+        lv.n_vis -= 1
+        if lv.n_vis:
+            memmove(&lv.vis[0], &lv.vis[1], lv.n_vis * sizeof(COrder))
+        return 1
+    if lv.n_hid:
+        out[0] = lv.hid[0]
+        lv.n_hid -= 1
+        if lv.n_hid:
+            memmove(&lv.hid[0], &lv.hid[1], lv.n_hid * sizeof(COrder))
+        return 1
+    return 0
+
+
+cdef int _c_remove_oid(CPriceLevel lv, long long oid, COrder *out) noexcept:
+    cdef Py_ssize_t i, n
+    n = lv.n_vis
+    for i in range(n):
+        if lv.vis[i].order_id == oid:
+            out[0] = lv.vis[i]
+            lv._visible_qty = lv._visible_qty - lv.vis[i].quantity
+            lv.n_vis = n - 1
+            if i < lv.n_vis:
+                memmove(&lv.vis[i], &lv.vis[i + 1], (lv.n_vis - i) * sizeof(COrder))
+            return 1
+    n = lv.n_hid
+    for i in range(n):
+        if lv.hid[i].order_id == oid:
+            out[0] = lv.hid[i]
+            lv.n_hid = n - 1
+            if i < lv.n_hid:
+                memmove(&lv.hid[i], &lv.hid[i + 1], (lv.n_hid - i) * sizeof(COrder))
+            return 1
+    return 0
+
+
+cdef inline object _snap_tuple(COrder *o):
+    """Fill / accept / cancel snapshot: primitives only, not a LimitOrder."""
+    return (o.agent_id, o.order_id, o.quantity, o.fill_price, o.limit_price, o.side)
+
+
+cdef void _corder_from_tuple(COrder *o, object t) except *:
+    o.agent_id = t[0]
+    o.time_placed = t[1]
+    o.quantity = t[3]
+    o.side = 1 if t[4] is _BID else 0
+    o.limit_price = t[5]
+    o.order_id = t[6]
+    o.fill_price = -1
+    o.flags = 0
+    if t[8]:
+        o.flags |= FL_HIDDEN
+    if t[9]:
+        o.flags |= FL_PTC
+    if t[10]:
+        o.flags |= FL_INSERT_ID
+    if len(t) > 11 and t[11]:
+        o.flags |= FL_POST_ONLY
+
+
+cdef void _corder_from_limit(COrder *o, object order) except *:
+    o.agent_id = order.agent_id
+    o.time_placed = order.time_placed
+    o.quantity = order.quantity
+    o.side = 1 if order.side is _BID else 0
+    o.limit_price = order.limit_price
+    o.order_id = order.order_id
+    o.fill_price = -1 if order.fill_price is None else order.fill_price
+    o.flags = 0
+    if order.is_hidden:
+        o.flags |= FL_HIDDEN
+    if order.is_price_to_comply:
+        o.flags |= FL_PTC
+    if order.insert_by_id:
+        o.flags |= FL_INSERT_ID
+    if order.is_post_only:
+        o.flags |= FL_POST_ONLY
+
+
 _APPLIED = False
 _LimitOrder = None
 _MarketOrder = None
@@ -445,9 +1172,10 @@ def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_nam
 
 
 def _exch_send_kind(owner, recipient_id, kind, order, type_name):
+    oid = order[1] if type(order) is tuple else order.order_id
     _send_compact(
         owner.kernel, owner.id, recipient_id, kind, order,
-        owner.pipeline_delay, type_name, order.order_id,
+        owner.pipeline_delay, type_name, oid,
     )
 
 
@@ -763,6 +1491,176 @@ def pl_order_has_equal_price(self, order):
     return order.limit_price == self.price
 
 
+cdef void _c_enter(object book, COrder *order) except *:
+    cdef bint is_bid = order.side == 1
+    cdef Py_ssize_t i, n
+    cdef object levels, price_level
+    cdef int px, lp
+    cdef CPriceLevel lv
+    levels = book.bids if is_bid else book.asks
+    px = order.limit_price
+    if not levels:
+        levels.append(_new_clevel(order))
+        return
+    lv = <CPriceLevel>levels[-1]
+    lp = lv.price
+    if (is_bid and px < lp) or ((not is_bid) and px > lp):
+        levels.append(_new_clevel(order))
+        return
+    n = len(levels)
+    for i in range(n):
+        lv = <CPriceLevel>levels[i]
+        lp = lv.price
+        if px == lp:
+            _c_vis_add(lv, order)
+            return
+        if (is_bid and px > lp) or ((not is_bid) and px < lp):
+            levels.insert(i, _new_clevel(order))
+            return
+
+
+cdef int _c_execute(object book, COrder *incoming, COrder *out_matched) except -1:
+    cdef bint is_bid = incoming.side == 1
+    cdef object levels
+    cdef CPriceLevel lv
+    cdef COrder *rest
+    cdef COrder matched
+    cdef int fill_qty
+    levels = book.asks if is_bid else book.bids
+    if not levels:
+        return 0
+    lv = <CPriceLevel>levels[0]
+    if not _c_is_match(lv, incoming, is_bid):
+        return 0
+    rest = _c_peek(lv)
+    if rest == NULL:
+        return 0
+    if incoming.quantity >= rest.quantity:
+        _c_pop(lv, &matched)
+        if _c_level_empty(lv):
+            del levels[0]
+    else:
+        matched = rest[0]
+        fill_qty = incoming.quantity
+        matched.quantity = fill_qty
+        rest.quantity -= fill_qty
+        if (rest.flags & FL_HIDDEN) == 0:
+            lv._visible_qty = lv._visible_qty - fill_qty
+    matched.fill_price = matched.limit_price
+    out_matched[0] = matched
+    return 1
+
+
+cdef void _c_send_snap(object owner, int recipient_id, int kind, COrder *o, object type_name) except *:
+    _send_compact(
+        owner.kernel, owner.id, recipient_id, kind, _snap_tuple(o),
+        owner.pipeline_delay, type_name, o.order_id,
+    )
+
+
+cdef bint _c_cancel(object book, bint is_bid, int px, long long oid, int agent_id, bint quiet) except -1:
+    cdef object levels
+    cdef Py_ssize_t i, n
+    cdef CPriceLevel lv
+    cdef COrder cancelled
+    levels = book.bids if is_bid else book.asks
+    if not levels:
+        return 0
+    n = len(levels)
+    for i in range(n):
+        lv = <CPriceLevel>levels[i]
+        if lv.price != px:
+            continue
+        if not _c_remove_oid(lv, oid, &cancelled):
+            continue
+        if _c_level_empty(lv):
+            del levels[i]
+        if not quiet:
+            _c_send_snap(book.owner, agent_id, 4, &cancelled, "OrderCancelledMsg")
+        book.last_update_ts = book.owner.current_time
+        return 1
+    return 0
+
+
+cdef void _c_handle_limit(object book, COrder *incoming, bint quiet) except *:
+    cdef bint is_bid = incoming.side == 1
+    cdef object owner = book.owner
+    cdef object opp, stp
+    cdef CPriceLevel lv
+    cdef COrder *rest
+    cdef COrder matched
+    cdef COrder fill
+    cdef COrder ack
+    cdef int trade_qty = 0
+    cdef long long trade_px_sum = 0
+    cdef object tr
+    cdef int eid
+
+    while True:
+        stp = getattr(owner, "stp_policy", None)
+        if stp:
+            opp = book.asks if is_bid else book.bids
+            if opp:
+                lv = <CPriceLevel>opp[0]
+                if _c_is_match(lv, incoming, is_bid):
+                    rest = _c_peek(lv)
+                    if rest != NULL and rest.agent_id == incoming.agent_id:
+                        if stp == "cancel_oldest" and _c_cancel(
+                            book, rest.side == 1, rest.limit_price,
+                            rest.order_id, rest.agent_id, quiet,
+                        ):
+                            continue
+                        if stp != "cancel_oldest":
+                            if not quiet:
+                                ack = incoming[0]
+                                _c_send_snap(owner, incoming.agent_id, 4, &ack, "OrderCancelledMsg")
+                            break
+        if _c_execute(book, incoming, &matched):
+            fill = incoming[0]
+            fill.quantity = matched.quantity
+            fill.fill_price = matched.fill_price
+            incoming.quantity -= matched.quantity
+            if not quiet:
+                _c_send_snap(owner, matched.agent_id, 2, &matched, "OrderExecutedMsg")
+                _c_send_snap(owner, incoming.agent_id, 2, &fill, "OrderExecutedMsg")
+            trade_qty += matched.quantity
+            trade_px_sum += <long long>matched.fill_price * matched.quantity
+            if incoming.quantity <= 0:
+                break
+        else:
+            _c_enter(book, incoming)
+            if not quiet:
+                _c_send_snap(owner, incoming.agent_id, 3, incoming, "OrderAcceptedMsg")
+            break
+
+    now = owner.current_time
+    tr = getattr(getattr(owner, "kernel", None), "_col_trace", None)
+    if tr is not None:
+        eid = owner.id
+        if book.bids:
+            lv = <CPriceLevel>book.bids[0]
+            if type(tr) is CTrace:
+                (<CTrace>tr).add_quote_c(now, 1, lv.price, lv._visible_qty, eid)
+            else:
+                tr.add_quote(now, True, lv.price, lv._visible_qty, eid)
+        if book.asks:
+            lv = <CPriceLevel>book.asks[0]
+            if type(tr) is CTrace:
+                (<CTrace>tr).add_quote_c(now, 0, lv.price, lv._visible_qty, eid)
+            else:
+                tr.add_quote(now, False, lv.price, lv._visible_qty, eid)
+    else:
+        log = owner.log
+        if book.bids:
+            lv = <CPriceLevel>book.bids[0]
+            log.append((now, "BEST_BID", lv.price, lv._visible_qty))
+        if book.asks:
+            lv = <CPriceLevel>book.asks[0]
+            log.append((now, "BEST_ASK", lv.price, lv._visible_qty))
+    if trade_qty:
+        book.last_trade = int(round(trade_px_sum / trade_qty))
+
+
 def execute_order(self, order):
     cdef bint is_bid = _side_is_bid(order)
     book = self.asks if is_bid else self.bids
@@ -857,87 +1755,16 @@ def enter_order(self, order, metadata=None, quiet=False):
 
 
 def handle_limit_order(self, order, quiet=False):
-    import warnings
-
-    if order.symbol != self.symbol:
-        warnings.warn(
-            f"{order.symbol} order discarded. Does not match OrderBook symbol: {self.symbol}"
-        )
-        return
-    qty = order.quantity
-    if (qty <= 0) or (int(qty) != qty):
-        warnings.warn(
-            f"{order.symbol} order discarded. Quantity ({order.quantity}) must be a positive integer."
-        )
-        return
-    px = order.limit_price
-    if (px < 0) or (int(px) != px):
-        warnings.warn(
-            f"{order.symbol} order discarded. Limit price ({order.limit_price}) must be a positive integer."
-        )
-        return
-
-    cdef bint is_bid = _side_is_bid(order)
-    executed = []
-    owner = self.owner
-    while True:
-        stp_policy = getattr(owner, "stp_policy", None)
-        if stp_policy:
-            opp = self.asks if is_bid else self.bids
-            if opp:
-                level0 = opp[0]
-                if _pl_is_match(level0, order, is_bid):
-                    resting = _pl_peek(level0)[0]
-                    if resting.agent_id == order.agent_id:
-                        if stp_policy == "cancel_oldest" and self.cancel_order(
-                            resting, quiet=quiet
-                        ):
-                            continue
-                        if stp_policy != "cancel_oldest":
-                            if not quiet:
-                                _exch_send_kind(
-                                    owner, order.agent_id, 4,
-                                    cheap_clone(order), "OrderCancelledMsg",
-                                )
-                            break
-
-        matched_order = self.execute_order(order)
-        if matched_order is not None:
-            executed.append((matched_order.quantity, matched_order.fill_price))
-            if order.quantity <= 0:
-                break
-        else:
-            self.enter_order(cheap_clone(order), quiet=quiet)
-            if not quiet:
-                _exch_send_kind(owner, order.agent_id, 3, order, "OrderAcceptedMsg")
-            break
-
-    now = owner.current_time
-    tr = getattr(getattr(owner, "kernel", None), "_col_trace", None)
-    if tr is not None:
-        eid = owner.id
-        if self.bids:
-            b0 = self.bids[0]
-            tr.add_quote(now, True, b0.price, b0._visible_qty, eid)
-        if self.asks:
-            a0 = self.asks[0]
-            tr.add_quote(now, False, a0.price, a0._visible_qty, eid)
+    cdef COrder incoming
+    if type(order) is tuple:
+        if order[2] != self.symbol or order[3] <= 0 or order[5] < 0:
+            return
+        _corder_from_tuple(&incoming, order)
     else:
-        log = owner.log
-        if self.bids:
-            b0 = self.bids[0]
-            log.append((now, "BEST_BID", b0.price, b0._visible_qty))
-        if self.asks:
-            a0 = self.asks[0]
-            log.append((now, "BEST_ASK", a0.price, a0._visible_qty))
-
-    if executed:
-        trade_qty = 0
-        trade_price = 0
-        for q, p in executed:
-            trade_qty += q
-            trade_price += p * q
-        self.last_trade = int(round(trade_price / trade_qty))
+        if order.symbol != self.symbol or order.quantity <= 0 or order.limit_price < 0:
+            return
+        _corder_from_limit(&incoming, order)
+    _c_handle_limit(self, &incoming, quiet)
 
 
 def handle_market_order(self, order):
@@ -976,8 +1803,24 @@ def handle_market_order(self, order):
 
 
 def cancel_order(self, order, tag=None, cancellation_metadata=None, quiet=False):
-    cdef bint is_bid = _side_is_bid(order)
+    cdef bint is_bid
+    cdef int px
+    cdef long long oid
+    cdef int agent_id
     cdef Py_ssize_t i, n
+    if type(order) is tuple:
+        is_bid = order[5] == 1
+        px = order[4]
+        oid = order[1]
+        agent_id = order[0]
+    else:
+        is_bid = _side_is_bid(order)
+        px = order.limit_price
+        oid = order.order_id
+        agent_id = order.agent_id
+    levels = self.bids if is_bid else self.asks
+    if levels and type(levels[0]) is CPriceLevel:
+        return _c_cancel(self, is_bid, px, oid, agent_id, quiet)
     book = self.bids if is_bid else self.asks
     if not book:
         return False
@@ -1339,12 +2182,10 @@ cdef void _exch_receive_compact(object self, object current_time, object sender_
     self.current_time = current_time
     self.kernel.agent_computation_delays[self.id] = self.computation_delay
     if kind == 5:
-        order = _as_limit(payload)
-        book = self.order_books.get(order.symbol)
+        symbol = payload[2] if type(payload) is tuple else payload.symbol
+        book = self.order_books.get(symbol)
         if book is not None:
-            # Hop is a field tuple; reconstruct here. Do not cheap_clone —
-            # this object is not the agent's self.orders entry.
-            book.handle_limit_order(order)
+            handle_limit_order(book, payload)
             if self.data_subscriptions:
                 self.publish_order_book_data()
         return
@@ -1712,25 +2553,51 @@ cdef void _dispatch_act(object agent) except *:
         agent.act()
 
 
+cdef inline void _tr_order(object self, int ev, int aid, unsigned char is_bid, int px, int sz, int oid) except *:
+    cdef object tr = getattr(self.kernel, "_col_trace", None)
+    if tr is None:
+        side = "BID" if is_bid else "ASK"
+        name = "ORDER_EXECUTED" if ev == EV_EXEC else (
+            "ORDER_ACCEPTED" if ev == EV_ACCEPT else (
+                "ORDER_CANCELLED" if ev == EV_CANCEL else "ORDER_SUBMITTED"
+            )
+        )
+        self.log.append((self.current_time, name, aid, side, px, sz, oid))
+        return
+    if type(tr) is CTrace:
+        (<CTrace>tr).add_order_c(self.current_time, ev, aid, is_bid, px, sz, oid)
+    else:
+        tr.add_order(
+            self.current_time,
+            "ORDER_EXECUTED" if ev == EV_EXEC else (
+                "ORDER_ACCEPTED" if ev == EV_ACCEPT else "ORDER_CANCELLED"
+            ),
+            aid, "BID" if is_bid else "ASK", px, sz, oid,
+        )
+
+
 cdef void _ta_order_executed(object self, object order) except *:
+    cdef int aid, oid, q, fp, lp
+    cdef unsigned char is_bid
+    if type(order) is tuple:
+        aid = order[0]
+        oid = order[1]
+        q = order[2]
+        fp = order[3]
+        lp = order[4]
+        is_bid = <unsigned char>order[5]
+        if fp < 0:
+            fp = 0
+    else:
+        aid = order.agent_id
+        oid = order.order_id
+        q = order.quantity
+        fp = 0 if order.fill_price is None else order.fill_price
+        is_bid = 1 if order.side is _BID else 0
     if self.log_orders:
-        tr = getattr(self.kernel, "_col_trace", None)
-        side = "BID" if order.side is _BID else "ASK"
-        px = 0 if order.fill_price is None else order.fill_price
-        if tr is not None:
-            tr.add_order(
-                self.current_time, "ORDER_EXECUTED", order.agent_id,
-                side, px, order.quantity, order.order_id,
-            )
-        else:
-            self.log.append(
-                (
-                    self.current_time, "ORDER_EXECUTED", order.agent_id,
-                    side, px, order.quantity, order.order_id,
-                )
-            )
-    qty = order.quantity if order.side is _BID else -order.quantity
-    sym = order.symbol
+        _tr_order(self, EV_EXEC, aid, is_bid, fp, q, oid)
+    qty = q if is_bid else -q
+    sym = self.symbol
     holdings = self.holdings
     if sym in holdings:
         holdings[sym] += qty
@@ -1738,52 +2605,52 @@ cdef void _ta_order_executed(object self, object order) except *:
         holdings[sym] = qty
     if holdings[sym] == 0:
         del holdings[sym]
-    holdings["CASH"] -= qty * order.fill_price
-    oid = order.order_id
+    holdings["CASH"] -= qty * fp
     orders = self.orders
     if oid in orders:
         o = orders[oid]
-        if order.quantity >= o.quantity:
+        if q >= o.quantity:
             del orders[oid]
         else:
-            o.quantity -= order.quantity
+            o.quantity -= q
 
 
 cdef void _ta_order_accepted(object self, object order) except *:
+    cdef int aid, oid, q, lp
+    cdef unsigned char is_bid
+    if type(order) is tuple:
+        aid = order[0]
+        oid = order[1]
+        q = order[2]
+        lp = order[4]
+        is_bid = <unsigned char>order[5]
+    else:
+        aid = order.agent_id
+        oid = order.order_id
+        q = order.quantity
+        lp = order.limit_price
+        is_bid = 1 if order.side is _BID else 0
     if self.log_orders:
-        tr = getattr(self.kernel, "_col_trace", None)
-        side = "BID" if order.side is _BID else "ASK"
-        if tr is not None:
-            tr.add_order(
-                self.current_time, "ORDER_ACCEPTED", order.agent_id,
-                side, order.limit_price, order.quantity, order.order_id,
-            )
-        else:
-            self.log.append(
-                (
-                    self.current_time, "ORDER_ACCEPTED", order.agent_id,
-                    side, order.limit_price, order.quantity, order.order_id,
-                )
-            )
+        _tr_order(self, EV_ACCEPT, aid, is_bid, lp, q, oid)
 
 
 cdef void _ta_order_cancelled(object self, object order) except *:
+    cdef int aid, oid, q, lp
+    cdef unsigned char is_bid
+    if type(order) is tuple:
+        aid = order[0]
+        oid = order[1]
+        q = order[2]
+        lp = order[4]
+        is_bid = <unsigned char>order[5]
+    else:
+        aid = order.agent_id
+        oid = order.order_id
+        q = order.quantity
+        lp = order.limit_price
+        is_bid = 1 if order.side is _BID else 0
     if self.log_orders:
-        tr = getattr(self.kernel, "_col_trace", None)
-        side = "BID" if order.side is _BID else "ASK"
-        if tr is not None:
-            tr.add_order(
-                self.current_time, "ORDER_CANCELLED", order.agent_id,
-                side, order.limit_price, order.quantity, order.order_id,
-            )
-        else:
-            self.log.append(
-                (
-                    self.current_time, "ORDER_CANCELLED", order.agent_id,
-                    side, order.limit_price, order.quantity, order.order_id,
-                )
-            )
-    oid = order.order_id
+        _tr_order(self, EV_CANCEL, aid, is_bid, lp, q, oid)
     orders = self.orders
     if oid in orders:
         del orders[oid]

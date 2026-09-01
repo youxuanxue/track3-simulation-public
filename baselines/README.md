@@ -12,7 +12,7 @@ thresholds for Track 3 submissions. The canonical timing protocol is `throughput
 > shipped reference runs, **geometric mean 13,793 events/sec** (range 3,471–18,046), on hardware
 > that is not recorded. See §1 for the derivation and §3 for what the ranking floor is actually
 > compared against — it is neither number. A fleet baseline is coming; it is tracked in
-> [#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42).
+> a tracking issue the organizers will open with the measurement.
 
 ---
 
@@ -83,7 +83,7 @@ nearly free under gVisor (allocation 0.3%, heap −0.9%, i.e. noise).
 **No fleet-measured baseline exists yet.** `timer.py --runs 5 --discard-warmup` has been named here
 as the protocol since 2026-06-23, but no run of it on the B200 hosts, under the gVisor sandbox every
 ranked run executes in, is recorded. Until one is — tracked in
-[#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42) — the honest statement is
+a tracking issue the organizers will open with the measurement — the honest statement is
 that the fleet baseline is unknown and a measured one is coming. Measure your own machine
 (`throughput/timer.py`) and improve on that; ranking is relative to other submissions, not to any
 number on this page.
@@ -292,7 +292,7 @@ no scoring path reads.
 **There is no fleet-measured baseline yet, and 13,793 is not one.** 13,793 is reproducible from the
 files in this repository (§1 shows the command) on hardware that is not recorded. A `timer.py` run
 on the evaluation fleet is tracked in
-[#42](https://github.com/Agenthon-2026/track3-simulation-public/issues/42). Until it lands, treat
+a tracking issue the organizers will open with the measurement. Until it lands, treat
 every events/sec figure on this page as scale, not as a measurement of the machine your submission
 will be scored on — and tune against your own measured baseline, since ranking is relative to other
 submissions.

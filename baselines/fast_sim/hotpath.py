@@ -114,6 +114,9 @@ def execute_order(self, order: Any) -> Optional[Any]:
         matched_order = cheap_clone(book_order)
         matched_order.quantity = order.quantity
         book_order.quantity -= matched_order.quantity
+        vq = getattr(level0, "_visible_qty", None)
+        if vq is not None:
+            level0._visible_qty = vq - matched_order.quantity
         if book_order.is_price_to_comply:
             is_ptc_exec = True
             if book_meta["ptc_hidden"] is False:

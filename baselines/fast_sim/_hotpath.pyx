@@ -437,12 +437,18 @@ cdef class COrderMap:
         return NULL
 
     cdef int remove(self, long long oid) noexcept:
+        # Keep insertion order (same as Python dict) so cancel_all
+        # emits CancelOrderMsg in the same sequence as Step 9.
         cdef Py_ssize_t i
         for i in range(self.n):
             if self.buf[i].order_id == oid:
                 self.n -= 1
                 if i < self.n:
-                    self.buf[i] = self.buf[self.n]
+                    memmove(
+                        &self.buf[i],
+                        &self.buf[i + 1],
+                        <size_t>(self.n - i) * sizeof(COrder),
+                    )
                 return 1
         return 0
 

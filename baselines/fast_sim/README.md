@@ -12,8 +12,9 @@ Phase 6 compiled the remaining hubs and then hit diminishing returns
 Python tuple heap with a C `EventQueue`. Step 2 inlines PriceLevel
 ops and compiles `cancel_order` inside the same Cython book.
 Step 3 compact hops were reverted (after-close extras). Step 4
-compiles MM / Value / Momentum `act()` (Noise was already compiled)
-with the same `numpy.random.RandomState` draw order. No GPU.
+compiled MM / Value / Momentum `act()`. Step 5 retries compact
+internal hops + a columnar ledger, with `QuerySpreadResponse.mkt_closed
+= current_time > mkt_close`. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -223,7 +224,7 @@ only then a second pass at compact hops that does not let an extra
 `act()` through after close. GPU still only for independent
 `simulate-batch` scenarios.
 
-## Championship step 4 (this change)
+## Championship step 4
 
 Compile MarketMaker / ValueTrader / MomentumTrader `act()` (NoiseTrader
 was already a Cython `noise_act`) and `TradingAgent.cancel_all_orders`.
@@ -249,3 +250,63 @@ noisier than the step-2 window). Official B200 worker will differ.
 **No speed is claimed.** The gate was bit-exact Family 1, not a
 throughput win. Compact hops stay off until after-close `act()` is
 proven identical on a hop cut — this step did not retry that.
+
+## Championship step 5 (this change)
+
+Retry the Step 3 compact internal-hop + columnar ledger cut now that
+after-close `act()` is proven. Exchange hops carry
+`(kind, payload, message_id)` on the same
+`(deliver_at, sid, rid, message_id)` heap key. Python `Message` /
+`LimitOrder` exist only at the agent boundary. Trace and message
+ledger write parallel columns.
+
+**The Step 3 bug:** `_materialize` hardcoded
+`QuerySpreadResponse.mkt_closed = False`. After-close QueryMsg
+(ABIDES allows the final spread) then looked open, so
+`sched_receive_message` called `act()` and the next limit/cancel
+wave hit `MarketClosedMsg`.
+
+**The fix:** after-close QuerySpread stays on the compact path and
+stores `mkt_closed = current_time > mkt_close` in the payload.
+After-close limit / cancel / market still fall back to the original
+`ExchangeAgent` (`MarketClosedMsg`). `sched_receive_message` still
+refuses `act()` when `mkt_closed`. No further agent wrappers. No GPU.
+
+**Family 1 14/14 exact.** s001 stays 120 `ORDER_SUBMITTED`, 84
+wakeups, 74 QuerySpread, **0** `MarketClosedMsg`, 604 / 664 rows.
+as06, gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 2 best | Step 5 best | vs Step 2 |
+|---|---|---|---|
+| `as06_throughput_fast` | 144,588 | **163,541** | **1.13×** |
+| `gb_mega_throughput` | 103,585 | **131,286** | **1.27×** |
+
+Repeats: as06 150.8k–163.5k, gb_mega 109.8k–131.3k. Official B200
+worker will differ. Both units cleared 10% vs Step 2 on this host.
+That is not 10×. Stop coding on this step.
+
+## Remaining 10× plan (do not implement here)
+
+A 10× from Step 2 (~145k / ~104k → ~1.4M / ~1.0M ev/s) is still
+~8–9× from Step 5 (~164k / ~131k). Compact hops + compiled agents
+removed the Python `Message` constructor on the exchange hop and
+the per-row tuple ledger. The leftover wall is still **Python on
+every hop**:
+
+- `numpy.random.RandomState` C-API calls (Noise size/side/offset,
+  latency model, `oracle.observe_price`)
+- `LimitOrder.__new__` + `cheap_clone` at the agent/book boundary
+- Cython `kernel_runner` billed back to the Python caller
+- pandas wrap of the columnar buffers at extract time
+
+The next cut that can move another factor is a **single C process**
+that owns the book, the heap, and the four Track-3 agents, with an
+**MT19937-compatible** RNG that matches `numpy.random.RandomState`
+bit-exact (same seed, same draw order — do not invent a new stream).
+Python stays only for scenario JSON → config and the final parquet
+write. After-close must keep the Step 5 rule: QuerySpread after
+`mkt_close` returns `mkt_closed=True`; limit/cancel after close
+become `MarketClosedMsg`; `act()` does not run when `mkt_closed`.
+Heap key stays `(deliver_at, sid, rid, message_id)`. GPU remains
+only for independent `simulate-batch` scenarios — never to reorder
+one book's events.

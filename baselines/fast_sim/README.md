@@ -17,7 +17,8 @@ internal hops + a columnar ledger, with `QuerySpreadResponse.mkt_closed
 = current_time > mkt_close`. Step 6 starts the single-C-process cut
 with a bit-exact C `MT19937` and NoiseTrader draws. Step 7 ports
 latency lognormal and ValueTrader `observe_price` onto that stream.
-No GPU.
+Step 8 dispatches wakeup / act / exchange inside Cython and keeps
+`LimitOrder` off the hop (field tuples). No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -340,12 +341,34 @@ worker will differ. Both units cleared 10% vs Step 6 on this host.
 Hot-path numpy RNG is gone (uniform/pareto latency is unused on
 these units). That is not 10×.
 
+## Championship step 8 (this change)
+
+C `Kernel.run` dispatch. No Python `Message` on the hop: wakeup /
+act / exchange are called as Cython functions. Limit-order hops
+carry field tuples; the agent keeps the original `LimitOrder` and
+the exchange reconstructs a working copy, so `cheap_clone` is not
+allocated per hop (fill snapshots stay — partial-fill semantics).
+After-close rules stay Step 5. Step 7 C RNG stays. No GPU.
+
+`mt19937_matches_numpy()` still True. **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 7 best | Step 8 best | vs Step 7 |
+|---|---|---|---|
+| `as06_throughput_fast` | 204,482 | **222,357** | **1.09×** |
+| `gb_mega_throughput` | 159,530 | **168,120** | **1.05×** |
+
+Repeats: as06 199.4k–222.4k, gb_mega 136.0k–168.1k. Official B200
+worker will differ. Incremental C dispatch is exact and a few
+percent faster; it is not 10×.
+
 ## Remaining 10× path
 
-~204k / ~160k → ~1.4M / ~1.0M is still ~7×. The leftover wall is
-**Python on `Kernel.run`**: Cython `kernel_runner` still enters
-Python for every hop (`LimitOrder` / `cheap_clone` at the agent
-boundary, pandas extract). A full-C kernel loop (no Python on
-`Kernel.run`) is the only remaining path that can move another
-factor; more agent wrappers will not. After-close stays Step 5.
-GPU only for independent `simulate-batch`.
+~222k / ~168k → ~1.4M / ~1.0M is still ~6×. Dispatch no longer
+materializes `Message` / per-hop `LimitOrder`, but the book still
+holds Python `LimitOrder` objects (`enter_order` clone, fill
+snapshot, `handle_limit_order` method) and extract still builds
+pandas at the end. A C book / C ledger (Python only for scenario
+load and final parquet) is the leftover cut. After-close stays
+Step 5. GPU only for independent `simulate-batch`.

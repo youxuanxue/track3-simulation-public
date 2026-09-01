@@ -11,6 +11,7 @@ from abides_core.utils import subdict
 from abides_markets.orders import Order
 
 from abides_fork.config import build_config
+from fast_sim.columns import ColumnLedger, ColumnTrace
 from fast_sim.extract import extract_message_trace_from_state, extract_trace_from_agents
 from fast_sim.optimize import HeapPQueue, apply_runtime_patches, slim_agents, slim_exchange
 
@@ -67,21 +68,26 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     )
     kernel.messages = EventQueue()
     kernel.show_trace_messages = False
-    # Populated at deliver time so extract can skip the ledger×seq join+sort.
-    kernel._delivered = []
+    kernel._col_ledger = ColumnLedger()
+    kernel._col_trace = ColumnTrace()
     kernel._pending_ledger = {}
+    kernel._delivered = []
 
     end_state = kernel.run()
-    # ExchangeAgent.kernel_terminating is a no-op; surface the ledger the
-    # kernel_message_ledger patch already wrote onto custom_state.
     if "message_ledger" not in end_state and hasattr(kernel, "_msg_ledger"):
         end_state["message_ledger"] = kernel._msg_ledger
         end_state["deliver_seq_by_key"] = kernel._deliver_seq_by_key
     if hasattr(kernel, "_delivered"):
         end_state["delivered_ledger"] = kernel._delivered
+    end_state["col_ledger"] = kernel._col_ledger
+    end_state["col_trace"] = kernel._col_trace
     if "agents" not in end_state:
         end_state["agents"] = agents
 
-    trace = extract_trace_from_agents(agents)
+    trace = (
+        kernel._col_trace.to_dataframe()
+        if kernel._col_trace
+        else extract_trace_from_agents(agents)
+    )
     message_trace = extract_message_trace_from_state(end_state)
     return trace, message_trace, end_state

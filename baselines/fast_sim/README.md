@@ -8,9 +8,10 @@ model stay the pinned ABIDES objects. Speed comes from work that does **not**
 appear in the scored traces, a compiled (Cython) OrderBook / Kernel hot path,
 and the Phase 3–6 cuts of the Python tax each profiler pass named.
 Phase 6 compiled the remaining hubs and then hit diminishing returns
-(<10% on both throughput units). Championship step 1 replaces the
-Python tuple heap with a C `EventQueue` (same ABIDES key); leftover
-agents stay Python. No GPU.
+(<10% on both throughput units). Championship step 1 replaced the
+Python tuple heap with a C `EventQueue`. Step 2 inlines PriceLevel
+ops and compiles `cancel_order` inside the same Cython book;
+leftover agents stay Python. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -159,3 +160,16 @@ Post-step-1 cProfile (as06): `Kernel.run` still billed to the Python
 caller (Cython loop). Next Python slices are extract, `order_executed`,
 and leftover MM/Value `act()` (~3%). Agents are **not** the new wall —
 do not rewrite them on this step.
+
+## Championship step 2 (this change)
+
+The remaining book wall after step 1 was Python `PriceLevel.peek` /
+`pop` / `add_order` / `order_is_match` and `Side.is_bid()` called from
+the already-compiled `execute_order` / `enter_order`. Step 2 inlines
+those operations (same `_visible_qty` cache, same cheap-clone fill
+snapshot) and compiles `cancel_order`. Agent-facing objects stay
+Python `Message` / `LimitOrder`. No GPU. No agent rewrite.
+
+Family 1 14/14 + as06 + one MP + one RA must stay exact before this is
+called progress. Throughput vs step 1 (~139k / ~98k) is measured after
+that gate.

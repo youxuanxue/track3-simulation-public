@@ -192,6 +192,7 @@ def apply_runtime_patches() -> None:
     _apply_phase4_patches()
     _apply_phase5_patches()
     _apply_phase6_patches()
+    _apply_step2_patches()
 
     _APPLIED = True
 
@@ -962,6 +963,16 @@ def _apply_phase6_patches() -> None:
     ScheduledAgent.receive_message = sched_receive_message  # type: ignore[method-assign]
     TradingAgent.place_limit_order = place_limit_order  # type: ignore[method-assign]
     NoiseTrader.act = noise_act  # type: ignore[method-assign]
+
+
+def _apply_step2_patches() -> None:
+    """Compiled PriceLevel + cancel_order after Phase 3 qty-cache wrappers."""
+    try:
+        from fast_sim._hotpath import apply_book_patches
+    except ImportError:
+        from fast_sim.hotpath import apply_book_patches
+
+    apply_book_patches()
 
 
 def slim_exchange(exchange: Any) -> None:

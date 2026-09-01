@@ -63,6 +63,9 @@ _OrderExecutedMsg = None
 _OrderAcceptedMsg = None
 _OrderCancelledMsg = None
 _WakeupMsg = None
+_PriceLevel = None
+_BID = None
+_ASK = None
 
 
 def make_order_msg(cls: Any, order: Any) -> Any:
@@ -145,15 +148,204 @@ def get_latency(self, sender_id: int, recipient_id: int) -> int:
     return int(round(float(value)))
 
 
+def _pl_peek(level: Any) -> Any:
+    vis = level.visible_orders
+    if vis:
+        return vis[0]
+    hid = level.hidden_orders
+    if hid:
+        return hid[0]
+    raise ValueError(
+        "Can't peek at LimitOrder in PriceLevel as it contains no orders"
+    )
+
+
+def _pl_pop(level: Any) -> Any:
+    vis = level.visible_orders
+    if vis:
+        item = vis.pop(0)
+        level._visible_qty = level._visible_qty - item[0].quantity
+        return item
+    hid = level.hidden_orders
+    if hid:
+        return hid.pop(0)
+    raise ValueError(
+        "Can't pop LimitOrder from PriceLevel as it contains no orders"
+    )
+
+
+def _pl_add(level: Any, order: Any, md: Any) -> None:
+    if order.is_hidden:
+        level.hidden_orders.append((order, md))
+        return
+    if order.insert_by_id:
+        vis = level.visible_orders
+        insert_index = 0
+        oid = order.order_id
+        for order2, _ in vis:
+            if order2.order_id > oid:
+                break
+            insert_index += 1
+        vis.insert(insert_index, (order, md))
+    else:
+        level.visible_orders.append((order, md))
+    level._visible_qty = level._visible_qty + order.quantity
+
+
+def _pl_remove(level: Any, order_id: Any) -> Any:
+    vis = level.visible_orders
+    for i, (book_order, _) in enumerate(vis):
+        if book_order.order_id == order_id:
+            item = vis.pop(i)
+            level._visible_qty = level._visible_qty - item[0].quantity
+            return item
+    hid = level.hidden_orders
+    for i, (book_order, _) in enumerate(hid):
+        if book_order.order_id == order_id:
+            return hid.pop(i)
+    return None
+
+
+def _pl_is_match(level: Any, order: Any, is_bid: bool) -> bool:
+    if is_bid:
+        if order.limit_price < level.price:
+            return False
+    elif order.limit_price > level.price:
+        return False
+    if order.is_post_only and level._visible_qty == 0:
+        return False
+    return True
+
+
+def _new_level(order: Any, md: Any) -> Any:
+    level = _PriceLevel.__new__(_PriceLevel)
+    level.price = order.limit_price
+    level.side = order.side
+    if order.is_hidden:
+        level.visible_orders = []
+        level.hidden_orders = [(order, md)]
+        level._visible_qty = 0
+    else:
+        level.visible_orders = [(order, md)]
+        level.hidden_orders = []
+        level._visible_qty = order.quantity
+    return level
+
+
+def pl_init(self, orders) -> None:
+    n = len(orders)
+    if n == 0:
+        raise ValueError(
+            "At least one LimitOrder must be given when initialising a PriceLevel."
+        )
+    order0, md0 = orders[0]
+    self.price = order0.limit_price
+    self.side = order0.side
+    if n == 1:
+        md = md0 or {}
+        if order0.is_hidden:
+            self.visible_orders = []
+            self.hidden_orders = [(order0, md)]
+            self._visible_qty = 0
+        else:
+            self.visible_orders = [(order0, md)]
+            self.hidden_orders = []
+            self._visible_qty = order0.quantity
+        return
+    self.visible_orders = []
+    self.hidden_orders = []
+    self._visible_qty = 0
+    for order, metadata in orders:
+        _pl_add(self, order, metadata or {})
+
+
+def pl_add_order(self, order, metadata=None) -> None:
+    _pl_add(self, order, metadata or {})
+
+
+def pl_peek(self):
+    return _pl_peek(self)
+
+
+def pl_pop(self):
+    return _pl_pop(self)
+
+
+def pl_remove_order(self, order_id):
+    return _pl_remove(self, order_id)
+
+
+def pl_update_order_quantity(self, order_id, new_quantity):
+    if new_quantity == 0:
+        return False
+    vis = self.visible_orders
+    for i, (order, metadata) in enumerate(vis):
+        if order.order_id == order_id:
+            old = order.quantity
+            if new_quantity <= old:
+                order.quantity = new_quantity
+            else:
+                vis.pop(i)
+                order.quantity = new_quantity
+                vis.append((order, metadata))
+            self._visible_qty = self._visible_qty + (new_quantity - old)
+            return True
+    hid = self.hidden_orders
+    for i, (order, metadata) in enumerate(hid):
+        if order.order_id == order_id:
+            old = order.quantity
+            if new_quantity <= old:
+                order.quantity = new_quantity
+            else:
+                hid.pop(i)
+                order.quantity = new_quantity
+                hid.append((order, metadata))
+            return True
+    return False
+
+
+def pl_order_is_match(self, order) -> bool:
+    if order.side == self.side:
+        raise ValueError("Attempted to compare order on wrong side of book")
+    return _pl_is_match(self, order, order.side is _BID)
+
+
+def pl_order_has_better_price(self, order) -> bool:
+    if order.side != self.side:
+        raise ValueError("Attempted to compare order on wrong side of book")
+    px = order.limit_price
+    lp = self.price
+    if order.side is _BID:
+        return px > lp
+    return px < lp
+
+
+def pl_order_has_worse_price(self, order) -> bool:
+    if order.side != self.side:
+        raise ValueError("Attempted to compare order on wrong side of book")
+    px = order.limit_price
+    lp = self.price
+    if order.side is _BID:
+        return px < lp
+    return px > lp
+
+
+def pl_order_has_equal_price(self, order) -> bool:
+    if order.side != self.side:
+        raise ValueError("Attempted to compare order on wrong side of book")
+    return order.limit_price == self.price
+
+
 def execute_order(self, order: Any) -> Optional[Any]:
     """ABIDES ``OrderBook.execute_order`` with cheap snapshots, no book-log I/O."""
     from abides_markets.messages.orderbook import OrderExecutedMsg
-    from abides_markets.orders import LimitOrder
 
-    book = self.asks if order.side.is_bid() else self.bids
+    is_bid = order.side is _BID
+    book = self.asks if is_bid else self.bids
     if not book:
         return None
-    if isinstance(order, LimitOrder) and not book[0].order_is_match(order):
+    level0 = book[0]
+    if type(order) is _LimitOrder and not _pl_is_match(level0, order, is_bid):
         return None
 
     tag = order.tag
@@ -161,31 +353,27 @@ def execute_order(self, order: Any) -> Optional[Any]:
         self.owner.logEvent(tag + "_POST_ONLY", {"order_id": order.order_id})
         return None
 
-    is_ptc_exec = False
-    level0 = book[0]
-    if order.quantity >= level0.peek()[0].quantity:
-        matched_order, matched_meta = level0.pop()
+    peek0 = _pl_peek(level0)
+    if order.quantity >= peek0[0].quantity:
+        matched_order, matched_meta = _pl_pop(level0)
         if matched_order.is_price_to_comply:
-            is_ptc_exec = True
             if matched_meta["ptc_hidden"] is False:
                 raise Exception(
                     "Should not be executing on the visible half of a price to comply order!"
                 )
-            assert book[1].remove_order(matched_order.order_id) is not None
-            if book[1].is_empty:
+            assert _pl_remove(book[1], matched_order.order_id) is not None
+            other = book[1]
+            if not other.visible_orders and not other.hidden_orders:
                 del book[1]
-        if level0.is_empty:
+        if not level0.visible_orders and not level0.hidden_orders:
             del book[0]
     else:
-        book_order, book_meta = level0.peek()
+        book_order, book_meta = peek0
         matched_order = cheap_clone(book_order)
         matched_order.quantity = order.quantity
         book_order.quantity -= matched_order.quantity
-        vq = getattr(level0, "_visible_qty", None)
-        if vq is not None:
-            level0._visible_qty = vq - matched_order.quantity
+        level0._visible_qty = level0._visible_qty - matched_order.quantity
         if book_order.is_price_to_comply:
-            is_ptc_exec = True
             if book_meta["ptc_hidden"] is False:
                 raise Exception(
                     "Should not be executing on the visible half of a price to comply order!"
@@ -212,35 +400,38 @@ def enter_order(
     quiet: bool = False,
 ) -> None:
     """ABIDES ``enter_order`` — same price-level insertion, no history / book-log."""
-    from abides_markets.price_level import PriceLevel
-
+    is_bid = order.side is _BID
     if order.is_price_to_comply and (
         metadata is None or metadata == {} or "ptc_hidden" not in metadata
     ):
         hidden_order = cheap_clone(order)
         visible_order = cheap_clone(order)
         hidden_order.is_hidden = True
-        hidden_order.limit_price += 1 if order.side.is_bid() else -1
+        hidden_order.limit_price += 1 if is_bid else -1
         hidden_meta = dict(ptc_hidden=True, ptc_other_half=visible_order)
         visible_meta = dict(ptc_hidden=False, ptc_other_half=hidden_order)
         self.enter_order(hidden_order, hidden_meta, quiet=True)
         self.enter_order(visible_order, visible_meta, quiet=quiet)
         return
 
-    book = self.bids if order.side.is_bid() else self.asks
+    book = self.bids if is_bid else self.asks
     md = metadata or {}
+    px = order.limit_price
     if not book:
-        book.append(PriceLevel([(order, md)]))
-    elif book[-1].order_has_worse_price(order):
-        book.append(PriceLevel([(order, md)]))
-    else:
-        for i, price_level in enumerate(book):
-            if price_level.order_has_better_price(order):
-                book.insert(i, PriceLevel([(order, md)]))
-                break
-            if price_level.order_has_equal_price(order):
-                book[i].add_order(order, md)
-                break
+        book.append(_new_level(order, md))
+        return
+    lp = book[-1].price
+    if (is_bid and px < lp) or ((not is_bid) and px > lp):
+        book.append(_new_level(order, md))
+        return
+    for i, price_level in enumerate(book):
+        lp = price_level.price
+        if px == lp:
+            _pl_add(price_level, order, md)
+            return
+        if (is_bid and px > lp) or ((not is_bid) and px < lp):
+            book.insert(i, _new_level(order, md))
+            return
 
 
 def handle_limit_order(self, order: Any, quiet: bool = False) -> None:
@@ -267,27 +458,30 @@ def handle_limit_order(self, order: Any, quiet: bool = False) -> None:
         )
         return
 
+    is_bid = order.side is _BID
     executed: list[tuple[int, int]] = []
     owner = self.owner
     while True:
         stp_policy = getattr(owner, "stp_policy", None)
         if stp_policy:
-            opp = self.asks if order.side.is_bid() else self.bids
-            if opp and opp[0].order_is_match(order):
-                resting = opp[0].peek()[0]
-                if resting.agent_id == order.agent_id:
-                    if stp_policy == "cancel_oldest" and self.cancel_order(
-                        resting, quiet=quiet
-                    ):
-                        continue
-                    if stp_policy != "cancel_oldest":
-                        if not quiet:
-                            _exch_kernel_send(
-                                owner,
-                                order.agent_id,
-                                make_order_msg(OrderCancelledMsg, cheap_clone(order)),
-                            )
-                        break
+            opp = self.asks if is_bid else self.bids
+            if opp:
+                level0 = opp[0]
+                if _pl_is_match(level0, order, is_bid):
+                    resting = _pl_peek(level0)[0]
+                    if resting.agent_id == order.agent_id:
+                        if stp_policy == "cancel_oldest" and self.cancel_order(
+                            resting, quiet=quiet
+                        ):
+                            continue
+                        if stp_policy != "cancel_oldest":
+                            if not quiet:
+                                _exch_kernel_send(
+                                    owner,
+                                    order.agent_id,
+                                    make_order_msg(OrderCancelledMsg, cheap_clone(order)),
+                                )
+                            break
 
         matched_order = self.execute_order(order)
         if matched_order is not None:
@@ -340,14 +534,15 @@ def handle_market_order(self, order: Any) -> None:
         )
         return
 
+    is_bid = order.side is _BID
     order = cheap_clone(order)
     owner = self.owner
     while order.quantity > 0:
         stp_policy = getattr(owner, "stp_policy", None)
         if stp_policy:
-            opp = self.asks if order.side.is_bid() else self.bids
-            if opp and opp[0].peek()[0].agent_id == order.agent_id:
-                if stp_policy == "cancel_oldest" and self.cancel_order(opp[0].peek()[0]):
+            opp = self.asks if is_bid else self.bids
+            if opp and _pl_peek(opp[0])[0].agent_id == order.agent_id:
+                if stp_policy == "cancel_oldest" and self.cancel_order(_pl_peek(opp[0])[0]):
                     continue
                 if stp_policy != "cancel_oldest":
                     _exch_kernel_send(
@@ -358,6 +553,52 @@ def handle_market_order(self, order: Any) -> None:
                     break
         if self.execute_order(order) is None:
             break
+
+
+def cancel_order(
+    self,
+    order: Any,
+    tag: Any = None,
+    cancellation_metadata: Any = None,
+    quiet: bool = False,
+) -> bool:
+    from abides_markets.messages.orderbook import OrderCancelledMsg
+
+    is_bid = order.side is _BID
+    book = self.bids if is_bid else self.asks
+    if not book:
+        return False
+    px = order.limit_price
+    oid = order.order_id
+    for i, level in enumerate(book):
+        if level.price != px:
+            continue
+        cancelled = _pl_remove(level, oid)
+        if cancelled is None:
+            continue
+        cancelled_order, metadata = cancelled
+        if not level.visible_orders and not level.hidden_orders:
+            del book[i]
+        if cancelled_order.is_price_to_comply:
+            self.cancel_order(metadata["ptc_other_half"], quiet=True)
+        if not quiet:
+            self.history.append(
+                dict(
+                    time=self.owner.current_time,
+                    type="CANCEL",
+                    order_id=cancelled_order.order_id,
+                    tag=tag,
+                    metadata=cancellation_metadata if tag == "auctionFill" else None,
+                )
+            )
+            _exch_kernel_send(
+                self.owner,
+                order.agent_id,
+                make_order_msg(OrderCancelledMsg, cancelled_order),
+            )
+        self.last_update_ts = self.owner.current_time
+        return True
+    return False
 
 
 def send_message(
@@ -530,7 +771,7 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
 
 def apply_hotpath_patches() -> None:
     """Idempotent class-level patches. Safe to call from every simulate()."""
-    global _APPLIED, _LimitOrder, _MarketOrder, _Message
+    global _APPLIED, _LimitOrder, _MarketOrder, _Message, _PriceLevel, _BID, _ASK
     if _APPLIED:
         return
 
@@ -540,16 +781,21 @@ def apply_hotpath_patches() -> None:
     from abides_markets.agents import exchange_agent as ea_mod
     from abides_markets.agents import trading_agent as ta_mod
     from abides_markets.order_book import OrderBook
-    from abides_markets.orders import LimitOrder, MarketOrder
+    from abides_markets.orders import LimitOrder, MarketOrder, Side
+    from abides_markets.price_level import PriceLevel
 
     _LimitOrder = LimitOrder
     _MarketOrder = MarketOrder
     _Message = Message
+    _PriceLevel = PriceLevel
+    _BID = Side.BID
+    _ASK = Side.ASK
 
     OrderBook.execute_order = execute_order  # type: ignore[method-assign]
     OrderBook.enter_order = enter_order  # type: ignore[method-assign]
     OrderBook.handle_limit_order = handle_limit_order  # type: ignore[method-assign]
     OrderBook.handle_market_order = handle_market_order  # type: ignore[method-assign]
+    OrderBook.cancel_order = cancel_order  # type: ignore[method-assign]
     Kernel.send_message = send_message  # type: ignore[method-assign]
     Kernel.set_wakeup = set_wakeup  # type: ignore[method-assign]
     Kernel.runner = kernel_runner  # type: ignore[method-assign]
@@ -558,3 +804,20 @@ def apply_hotpath_patches() -> None:
     ta_mod.deepcopy = _cheap_or_deepcopy
 
     _APPLIED = True
+
+
+def apply_book_patches() -> None:
+    from abides_markets.order_book import OrderBook
+    from abides_markets.price_level import PriceLevel
+
+    PriceLevel.__init__ = pl_init  # type: ignore[method-assign]
+    PriceLevel.add_order = pl_add_order  # type: ignore[method-assign]
+    PriceLevel.peek = pl_peek  # type: ignore[method-assign]
+    PriceLevel.pop = pl_pop  # type: ignore[method-assign]
+    PriceLevel.remove_order = pl_remove_order  # type: ignore[method-assign]
+    PriceLevel.update_order_quantity = pl_update_order_quantity  # type: ignore[method-assign]
+    PriceLevel.order_is_match = pl_order_is_match  # type: ignore[method-assign]
+    PriceLevel.order_has_better_price = pl_order_has_better_price  # type: ignore[method-assign]
+    PriceLevel.order_has_worse_price = pl_order_has_worse_price  # type: ignore[method-assign]
+    PriceLevel.order_has_equal_price = pl_order_has_equal_price  # type: ignore[method-assign]
+    OrderBook.cancel_order = cancel_order  # type: ignore[method-assign]

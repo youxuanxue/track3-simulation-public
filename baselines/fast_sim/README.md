@@ -21,7 +21,9 @@ Step 8 dispatches wakeup / act / exchange inside Cython and keeps
 `LimitOrder` off the hop (field tuples). Step 9 puts a C `COrder`
 in the book and writes trace / ledger from C arrays. Step 10
 makes the hop a C `Event` and keeps agent working orders in a C
-map. No GPU.
+map. Step 11 is a from-scratch C kernel (`fast_sim._native`) that
+replaces `Kernel.run` for the four Track-3 agents + exchange; the
+hybrid stays as `FAST_SIM_NATIVE=0`. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -388,7 +390,7 @@ gb_mega, MP (`mp01`) and RA (`ra01`) exact.
 Repeats: as06 227.0k–241.8k, gb_mega 200.8k–206.4k. Official B200
 worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
 
-## Championship step 10 (this change)
+## Championship step 10
 
 C Event hops + C agent order map. The hop payload is a C `Event`
 with an embedded `COrder` and L2-1 fields — not a Python Event
@@ -411,12 +413,37 @@ gb_mega, MP (`mp01`) and RA (`ra01`) exact.
 Repeats: as06 239.9k–263.4k, gb_mega 208.4k–229.8k. Official B200
 worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
 
+## Championship step 11 (this change)
+
+From-scratch C kernel (`fast_sim._native.NativeSim`). It snapshots
+params and RNG streams from `build_config`, then runs a C event
+loop that never calls `Kernel.run`. Same heap key
+`(deliver_at, sid, rid, message_id)`, same `message_id` /
+`order_id` allocation, C `MT19937` bound to each agent's
+`RandomState`, STP, `pipeline_delay`, and Step 5 after-close
+(QuerySpread answered with `mkt_closed`; limit/cancel become
+`MarketClosedMsg`). Close-price broadcast reuses one `message_id`
+like stock `ExchangeAgent.wakeup`. Hybrid `_hotpath` is unchanged
+and is the fallback (`FAST_SIM_NATIVE=0` or an unsupported
+roster). No GPU.
+
+`mt19937_matches_numpy()` still True. **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact. Hybrid fallback
+still matches s001.
+
+| Scenario | Step 10 best | Step 11 best | vs Step 10 |
+|---|---|---|---|
+| `as06_throughput_fast` | 263,427 | **526,419** | **2.00×** |
+| `gb_mega_throughput` | 229,848 | **465,876** | **2.03×** |
+
+Repeats: as06 459.3k–526.4k, gb_mega 447.5k–465.9k. Official B200
+worker will differ. Both units cleared 10%. Not 10×.
+
 ## Remaining 10× path
 
-~263k / ~230k → ~1.4M / ~1.0M is still ~5–6×. The named Step 9
-walls (Python Event+tuple hops, Python `LimitOrder` in
-`self.orders`) are cut. What is left is the hybrid itself: Python
-agent objects, the ABIDES Kernel shell, and pandas at parquet
-dump. A from-scratch C simulator is the leftover 10× path.
-After-close stays Step 5. GPU only for independent
-`simulate-batch`.
+~526k / ~466k → ~1.4M / ~1.0M is still ~2.7–3×. Native owns the
+kernel, book, four agents, and ledger; leftover Python is
+`RandomState.uniform` latency, oracle `observe_price` for
+ValueTrader, and pandas at parquet dump. After-close stays
+Step 5. GPU only for independent `simulate-batch`.

@@ -953,6 +953,30 @@ cdef class NativeSim:
         )
         self.pending[(mid, rid)] = idx
 
+    cdef void _enq_mid(self, int sid, int rid, int kind, Event *ev, long long delay, int mtype, long long mid, long long oid, bint oid_na) except *:
+        """Enqueue with a pre-assigned message_id (MarketClosePrice broadcast)."""
+        cdef long long sent, lat, deliver
+        cdef unsigned char flags
+        cdef Py_ssize_t idx
+        sent = self.now + self.cdelay[sid] + delay
+        lat = self._latency(sid, rid)
+        deliver = sent + lat
+        ev.deliver_at = deliver
+        ev.sender_id = sid
+        ev.recipient_id = rid
+        ev.message_id = mid
+        ev.kind = kind
+        self.q._push_raw(ev[0])
+        flags = 0
+        if oid_na:
+            flags |= LF_OID_NA
+        if self.causal == 0:
+            flags |= LF_PARENT_NA
+        idx = self.ledger.append_c(
+            mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
+        )
+        self.pending[(mid, rid)] = idx
+
     cdef void _wakeup_at(self, int aid, long long when) except *:
         cdef Event ev
         cdef long long mid
@@ -1269,12 +1293,17 @@ cdef class NativeSim:
         a.state = ST_SPREAD
 
     cdef void _send_close_px(self) except *:
+        # Stock ExchangeAgent.wakeup builds ONE MarketClosePriceMsg and
+        # send_message's it to every subscriber — one message_id, N hops.
         cdef Event ev
         cdef int i
+        cdef long long mid
+        mid = self.next_mid
+        self.next_mid += 1
         for i in range(self.n_sub):
             self._zero_ev(&ev)
             ev.extra = self.last_trade
-            self._enq(0, self.subs[i], KIND_CLOSE_PX, &ev, 0, 12, 0, 1)
+            self._enq_mid(0, self.subs[i], KIND_CLOSE_PX, &ev, 0, 12, mid, 0, 1)
 
     cdef void _exch_recv(self, int sender, Event *ev) except *:
         cdef bint closed = self.now > self.mkt_close

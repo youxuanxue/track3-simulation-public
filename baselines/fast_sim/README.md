@@ -8,14 +8,14 @@ model stay the pinned ABIDES objects. Speed comes from work that does **not**
 appear in the scored traces, plus a compiled (Cython) copy of the OrderBook
 and Kernel hot path that is required to stay bit-exact with those traces.
 
-Phase 1 (already landed): unlocked `heapq`, filtered agent logs, skipped
-book-log snapshots, parallel `simulate-batch`.
+Phase 1: unlocked `heapq`, filtered agent logs, skipped book-log snapshots,
+parallel `simulate-batch`.
 
-Phase 2 (this revision): Cython `OrderBook` + `Kernel` hot path. Partial fills
-update remaining quantity in place after a **cheap field-copy snapshot** that
-keeps `order_id` (no counter bump). The accept path still stores a **second**
-order object in the book — ABIDES `deepcopy` here is snapshotting, not optional
-work. GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
+Phase 2: Cython `OrderBook` + `Kernel` hot path. Partial fills update remaining
+quantity in place after a **cheap field-copy snapshot** that keeps `order_id`
+(no counter bump). The accept path still stores a **second** order object in
+the book — ABIDES `deepcopy` here is snapshotting, not optional work. GPU is
+unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
 ## Why Cython (not Rust / C++)
 
@@ -69,10 +69,33 @@ runtime network).
 ## Local semantic + throughput results (this host, not the B200 fleet)
 
 Official ranking is host-measured parquet-row-count / wall clock. Machines
-differ; numbers below are directional.
+differ; numbers below are directional. Traces were compared to the shipped
+unit references (exact fill sequence, exact event coverage, exact timestamps,
+exact message ledger).
 
-**Phase 1** (Python trim + batch): 65/65 singles and 30/30 batch subs exact;
-`as06_throughput_fast` 19,746 ev/s; `gb_mega_throughput` 22,421 ev/s.
+**Phase 2: 65/65 public single-scenario units exact. 6/6 public batch units
+exact (30/30 isolated subs).** Official `run_regression.py` was not run here
+(no Docker daemon in this environment).
 
-**Phase 2** timings and re-validation are in the PR description after the
-compiled path is measured on this host.
+| Family | Public units | Result |
+|---|---|---|
+| 1 matching-engine-semantics | 14 | 14/14 exact |
+| 2 / AS agent-mix + ST | 10 | 10/10 exact |
+| 3 latency-profile (EQ + s019) | 9 | 9/9 exact |
+| 4 / CA + SF calibration | 12 | 12/12 exact |
+| 6 throughput-scale (`gb_*`) | 6 | 6/6 exact |
+| 7 exchange-protocol (MP) | 7 | 7/7 exact |
+| 8 reactive-agent (RA) | 6 | 6/6 exact |
+| GB `t3-gbatch-*` | 6 batch (30 subs) | 30/30 exact |
+
+| Scenario | Shipped ev/s | Phase 1 | Phase 2 | vs Phase 1 |
+|---|---|---|---|---|
+| `s001_price_time_priority` | 3,471 | 17,062 | 20,751 | 1.22× (tiny; startup-heavy) |
+| `as06_throughput_fast` | 14,183 | 19,746 | **36,500** | **1.85×** |
+| `gb_mega_throughput` | 10,571 | 22,421 | **28,129** | **1.25×** |
+| `t3-gbatch-homog-8` (aggregate) | — | 61,779 | 69,577 | 1.13× |
+
+`events_per_sec` is `n_events / wall_clock_sec` of the simulation loop
+(same convention as the adapter). Consistency is exact, well inside ±5%.
+Phase 1 and Phase 2 were measured on the **same host**; the official B200
+worker will differ.

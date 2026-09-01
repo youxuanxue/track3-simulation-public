@@ -1,4 +1,4 @@
-# Track 3 participant image: ABIDES-faithful matching engine with a faster kernel path.
+# Track 3 participant image: ABIDES-faithful matching engine with a Cython hot path.
 #
 # Build (evaluation platform):
 #   docker build --platform=linux/amd64 -t track3-fast-sim:latest .

@@ -14,7 +14,8 @@ ops and compiles `cancel_order` inside the same Cython book.
 Step 3 compact hops were reverted (after-close extras). Step 4
 compiled MM / Value / Momentum `act()`. Step 5 retries compact
 internal hops + a columnar ledger, with `QuerySpreadResponse.mkt_closed
-= current_time > mkt_close`. No GPU.
+= current_time > mkt_close`. Step 6 starts the single-C-process cut
+with a bit-exact C `MT19937` and NoiseTrader draws. No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -251,7 +252,7 @@ noisier than the step-2 window). Official B200 worker will differ.
 throughput win. Compact hops stay off until after-close `act()` is
 proven identical on a hop cut — this step did not retry that.
 
-## Championship step 5 (this change)
+## Championship step 5
 
 Retry the Step 3 compact internal-hop + columnar ledger cut now that
 after-close `act()` is proven. Exchange hops carry
@@ -285,28 +286,35 @@ Repeats: as06 150.8k–163.5k, gb_mega 109.8k–131.3k. Official B200
 worker will differ. Both units cleared 10% vs Step 2 on this host.
 That is not 10×. Stop coding on this step.
 
-## Remaining 10× plan (do not implement here)
+## Championship step 6 (this change)
 
-A 10× from Step 2 (~145k / ~104k → ~1.4M / ~1.0M ev/s) is still
-~8–9× from Step 5 (~164k / ~131k). Compact hops + compiled agents
-removed the Python `Message` constructor on the exchange hop and
-the per-row tuple ledger. The leftover wall is still **Python on
-every hop**:
+Incremental slice of the single-C-process cut: a Cython `MT19937`
+that lock-steps `numpy.random.RandomState` (numpy 1.26 polar
+`legacy_gauss` + masked `randint` via `next32`) and
+`NoiseTrader.act` draws from that state after one `get_state()`
+bind. Book, heap, and MM/Value/Momentum `act()` were already
+compiled. Latency `lognormal` / `oracle.observe_price` still call
+numpy. After-close rules stay Step 5. No GPU. No new agent wrappers.
 
-- `numpy.random.RandomState` C-API calls (Noise size/side/offset,
-  latency model, `oracle.observe_price`)
-- `LimitOrder.__new__` + `cheap_clone` at the agent/book boundary
-- Cython `kernel_runner` billed back to the Python caller
-- pandas wrap of the columnar buffers at extract time
+`mt19937_matches_numpy()` is True (20 and 50 seeds). **Family 1
+14/14 exact.** s001 stays 120 / 84 / 74 / 0 MarketClosedMsg /
+604/664. as06, gb_mega, MP (`mp01`) and RA (`ra01`) exact.
 
-The next cut that can move another factor is a **single C process**
-that owns the book, the heap, and the four Track-3 agents, with an
-**MT19937-compatible** RNG that matches `numpy.random.RandomState`
-bit-exact (same seed, same draw order — do not invent a new stream).
-Python stays only for scenario JSON → config and the final parquet
-write. After-close must keep the Step 5 rule: QuerySpread after
-`mkt_close` returns `mkt_closed=True`; limit/cancel after close
-become `MarketClosedMsg`; `act()` does not run when `mkt_closed`.
-Heap key stays `(deliver_at, sid, rid, message_id)`. GPU remains
-only for independent `simulate-batch` scenarios — never to reorder
-one book's events.
+| Scenario | Step 5 best | Step 6 best | vs Step 5 |
+|---|---|---|---|
+| `as06_throughput_fast` | 163,541 | **176,368** | **1.08×** |
+| `gb_mega_throughput` | 131,286 | **137,687** | **1.05×** |
+
+Repeats: as06 161.9k–176.4k, gb_mega 117.5k–137.7k. Official B200
+worker will differ. Noise `RandomState` method calls are no longer
+the wall. Remaining 10× is still one C process for latency /
+`observe_price` / `LimitOrder` construction / extract, not more
+Python agent wrappers.
+
+## Remaining 10× plan
+
+~176k / ~138k → ~1.4M / ~1.0M is still ~8×. Next slices, in order:
+(1) C `legacy_lognormal` / `uniform` on the latency model using the
+same `MT19937`, (2) C `observe_price` normal for ValueTrader,
+(3) drop Python `LimitOrder` on the compact hop entirely. After-close
+stays Step 5. GPU only for independent `simulate-batch`.

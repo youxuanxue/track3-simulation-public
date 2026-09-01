@@ -236,10 +236,10 @@ def handle_limit_order(self, order, quiet=False):
     now = owner.current_time
     if self.bids:
         b0 = self.bids[0]
-        log.append((now, "BEST_BID", b0.price, b0.total_quantity))
+        log.append((now, "BEST_BID", b0.price, b0._visible_qty))
     if self.asks:
         a0 = self.asks[0]
-        log.append((now, "BEST_ASK", a0.price, a0.total_quantity))
+        log.append((now, "BEST_ASK", a0.price, a0._visible_qty))
 
     if executed:
         trade_qty = 0

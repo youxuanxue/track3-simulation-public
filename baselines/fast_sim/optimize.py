@@ -644,9 +644,15 @@ def _apply_phase5_patches() -> None:
         self.insert_by_id = insert_by_id
         self.is_post_only = is_post_only
 
+    def is_bid(self) -> bool:
+        return self is _BID
+
+    def is_ask(self) -> bool:
+        return self is _ASK
+
     LimitOrder.__init__ = limit_init  # type: ignore[method-assign]
-    Side.is_bid = lambda self: self is _BID  # type: ignore[method-assign]
-    Side.is_ask = lambda self: self is _ASK  # type: ignore[method-assign]
+    Side.is_bid = is_bid  # type: ignore[method-assign]
+    Side.is_ask = is_ask  # type: ignore[method-assign]
 
     def place_limit_order(
         self,

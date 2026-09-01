@@ -23,7 +23,10 @@ in the book and writes trace / ledger from C arrays. Step 10
 makes the hop a C `Event` and keeps agent working orders in a C
 map. Step 11 is a from-scratch C kernel (`fast_sim._native`) that
 replaces `Kernel.run` for the four Track-3 agents + exchange; the
-hybrid stays as `FAST_SIM_NATIVE=0`. No GPU.
+hybrid stays as `FAST_SIM_NATIVE=0`. Step 12 moves latency
+`uniform` onto C `MT19937` and writes parquet from pyarrow
+Tables. ValueTrader `observe_price` stays on the Python oracle
+(the C OU/megashock port broke Family 1). No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -413,7 +416,7 @@ gb_mega, MP (`mp01`) and RA (`ra01`) exact.
 Repeats: as06 239.9k–263.4k, gb_mega 208.4k–229.8k. Official B200
 worker will differ. gb_mega cleared 10%; as06 did not. Not 10×.
 
-## Championship step 11 (this change)
+## Championship step 11
 
 From-scratch C kernel (`fast_sim._native.NativeSim`). It snapshots
 params and RNG streams from `build_config`, then runs a C event
@@ -440,10 +443,34 @@ still matches s001.
 Repeats: as06 459.3k–526.4k, gb_mega 447.5k–465.9k. Official B200
 worker will differ. Both units cleared 10%. Not 10×.
 
+## Championship step 12 (this change)
+
+Eat leftover Python inside native. Latency `uniform` / `pareto`
+use C `MT19937` (`low + (high-low)*U`, `-log(1-U)*scale`,
+`(1-U)^(-1/α)-1`); `native_rng_matches_numpy()` is True. Native
+`result()` is a pyarrow Table; `simulate` writes snappy parquet
+without a DataFrame copy. A C port of SparseMeanRevertingOracle
+`observe_price` (OU + global `exponential` megashocks + scheduled
+jumps) broke Family 1 row counts and was reverted — ValueTrader
+still calls the Python oracle. Native stays default. Hybrid
+fallback unchanged. No GPU.
+
+`mt19937_matches_numpy()` still True. **Family 1 14/14 exact.**
+s001 stays 120 / 84 / 74 / 0 MarketClosedMsg / 604/664. as06,
+gb_mega, MP (`mp01`) and RA (`ra01`) exact.
+
+| Scenario | Step 11 best | Step 12 best | vs Step 11 |
+|---|---|---|---|
+| `as06_throughput_fast` | 526,419 | **527,322** | **1.00×** |
+| `gb_mega_throughput` | 465,876 | **462,285** | **0.99×** |
+
+Repeats: as06 462.9k–527.3k, gb_mega 441.3k–462.3k. Official B200
+worker will differ. Both units &lt;10% vs Step 11 (as06/gb_mega
+are log-normal, already on C). Not 10×.
+
 ## Remaining 10× path
 
-~526k / ~466k → ~1.4M / ~1.0M is still ~2.7–3×. Native owns the
-kernel, book, four agents, and ledger; leftover Python is
-`RandomState.uniform` latency, oracle `observe_price` for
-ValueTrader, and pandas at parquet dump. After-close stays
+~527k / ~462k → ~1.4M / ~1.0M is still ~2.7–3×. Leftover Python
+is ValueTrader `observe_price` (OU / megashock / scheduled jump)
+and pyarrow table build at the end of the run. After-close stays
 Step 5. GPU only for independent `simulate-batch`.

@@ -99,11 +99,12 @@ differ. `events_per_sec` is `n_events / wall_clock_sec`.
 ## Championship roadmap (what 10× vs current would take)
 
 A 10× from ~120k / ~78k is **~1.2M / ~780k ev/s**. That is not another
-`__str__` or `isinstance` patch. Remaining wall is **per-message Python**:
-`LimitOrder` / `Message` objects, a heap of Python tuples, a numpy
-`RandomState` call per NoiseTrader draw, a latency draw + ledger row per
-send, and MM/Value/Momentum `act()` still in Python. Discrete-event
-matching plus Tier-A exactness forbids batched/JAX books.
+`__str__` or `isinstance` patch. After step 1 the Python tuple heap is
+gone. Remaining wall is still **per-message Python**: `LimitOrder` /
+`Message` objects, a numpy `RandomState` call per NoiseTrader draw, a
+latency draw + ledger row per send, extract walking logs, and
+MM/Value/Momentum `act()` still in Python. Discrete-event matching plus
+Tier-A exactness forbids batched/JAX books.
 
 **Keep in Python:** scenario JSON → config, rare paths (MarketHours,
 post-close, modify/replace), parquet extract.
@@ -141,6 +142,19 @@ pop that heap; leftover agents still receive Python `Message` /
 `RandomState` draws, `pipeline_delay`, STP, and the partial-fill
 snapshot are unchanged. GPU is unused.
 
-Family 1 14/14 + as06 + one MP + one RA must stay exact before this is
-called progress. Throughput vs Phase 5 (~120k / ~78k) is measured after
-that gate.
+**Family 1 14/14 exact.** as06, gb_mega, MP (`mp01`) and RA (`ra01`)
+exact. Heap-order unit test matches `heapq` on
+`(deliver_at, (sid, rid, message_id))`.
+
+| Scenario | P5 | P6 | Step 1 best | vs Phase 5 |
+|---|---|---|---|---|
+| `as06_throughput_fast` | 119,608 | 129,295 | **138,985** | **1.16×** |
+| `gb_mega_throughput` | 78,140 | 74,862 | **98,377** | **1.26×** |
+
+Repeats: as06 130.8k–139.0k, gb_mega 95.9k–98.4k. Official B200 worker
+will differ.
+
+Post-step-1 cProfile (as06): `Kernel.run` still billed to the Python
+caller (Cython loop). Next Python slices are extract, `order_executed`,
+and leftover MM/Value `act()` (~3%). Agents are **not** the new wall —
+do not rewrite them on this step.

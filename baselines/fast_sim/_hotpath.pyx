@@ -346,6 +346,28 @@ _py_exch_recv_fallback = None
 _py_ta_recv_fallback = None
 
 
+cdef object _get_latency(object self, object sender_id, object recipient_id):
+    if sender_id == recipient_id:
+        return 0
+    model = self._model
+    if model == "log_normal":
+        value = _agent_mt(self).lognormal(self._mu, self._sigma)
+    elif model == "uniform":
+        value = self.random_state.uniform(self._min_ns, self._max_ns)
+    elif model == "pareto":
+        base = self._min_ns if self._min_ns > 0 else 1.0
+        value = base * (1.0 + self.random_state.pareto(self._alpha))
+    else:
+        value = self._mean_ns
+    lo = self._min_ns
+    hi = self._max_ns
+    if value < lo:
+        value = lo
+    elif value > hi:
+        value = hi
+    return int(round(float(value)))
+
+
 def make_order_msg(cls, order):
     """Same fields + ``message_id`` as the dataclass, without ``__post_init__``."""
     m = cls.__new__(cls)
@@ -397,7 +419,7 @@ def _ledger_send(kernel, mid, sender_id, recipient_id, sent_time, deliver_at, ty
         pending[(mid, recipient_id)] = entry
 
 
-def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_name, order_id):
+cdef void _send_compact(object kernel, object sender_id, object recipient_id, int kind, object payload, object delay, object type_name, object order_id) except *:
     """Enqueue a compact hop and assign ``message_id`` in ABIDES construction order."""
     mid = _alloc_mid()
     sent_time = (
@@ -408,9 +430,7 @@ def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_nam
     )
     latency_model = kernel.agent_latency_model
     if latency_model is not None:
-        latency = latency_model.get_latency(
-            sender_id=sender_id, recipient_id=recipient_id
-        )
+        latency = _get_latency(latency_model, sender_id, recipient_id)
         deliver_at = sent_time + int(latency)
     else:
         latency = kernel.agent_latency[sender_id][recipient_id]
@@ -420,8 +440,12 @@ def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_nam
     _ledger_send(kernel, mid, sender_id, recipient_id, sent_time, deliver_at, type_name, order_id)
 
 
+def send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_name, order_id):
+    _send_compact(kernel, sender_id, recipient_id, kind, payload, delay, type_name, order_id)
+
+
 def _exch_send_kind(owner, recipient_id, kind, order, type_name):
-    send_compact(
+    _send_compact(
         owner.kernel, owner.id, recipient_id, kind, order,
         owner.pipeline_delay, type_name, order.order_id,
     )
@@ -501,6 +525,31 @@ def cheap_clone(order):
     return clone
 
 
+cdef object _limit_from_tuple(object t):
+    """Rebuild a LimitOrder at the exchange. Hop payload is fields, not an object."""
+    o = _LimitOrder.__new__(_LimitOrder)
+    o.agent_id = t[0]
+    o.time_placed = t[1]
+    o.symbol = t[2]
+    o.quantity = t[3]
+    o.side = t[4]
+    o.limit_price = t[5]
+    o.order_id = t[6]
+    o.fill_price = None
+    o.tag = t[7]
+    o.is_hidden = t[8]
+    o.is_price_to_comply = t[9]
+    o.insert_by_id = t[10]
+    o.is_post_only = t[11]
+    return o
+
+
+cdef object _as_limit(object payload):
+    if type(payload) is tuple:
+        return _limit_from_tuple(payload)
+    return payload
+
+
 def _cheap_or_deepcopy(obj, memo=None):
     t = type(obj)
     if t is _LimitOrder or t is _MarketOrder:
@@ -511,25 +560,7 @@ def _cheap_or_deepcopy(obj, memo=None):
 
 
 def get_latency(self, sender_id, recipient_id):
-    if sender_id == recipient_id:
-        return 0
-    model = self._model
-    if model == "log_normal":
-        value = _agent_mt(self).lognormal(self._mu, self._sigma)
-    elif model == "uniform":
-        value = self.random_state.uniform(self._min_ns, self._max_ns)
-    elif model == "pareto":
-        base = self._min_ns if self._min_ns > 0 else 1.0
-        value = base * (1.0 + self.random_state.pareto(self._alpha))
-    else:
-        value = self._mean_ns
-    lo = self._min_ns
-    hi = self._max_ns
-    if value < lo:
-        value = lo
-    elif value > hi:
-        value = hi
-    return int(round(float(value)))
+    return _get_latency(self, sender_id, recipient_id)
 
 
 cdef inline bint _side_is_bid(object order) except -1:
@@ -1005,7 +1036,8 @@ def send_message(self, sender_id, recipient_id, message, delay=0):
         kind, payload, type_name = 7, (message.symbol, message.depth), "QuerySpreadMsg"
     elif t is _QuerySpreadResponseMsg:
         kind, payload, type_name = 8, (
-            message.symbol, message.depth, message.bids, message.asks, message.last_trade
+            message.symbol, message.depth, message.bids, message.asks,
+            message.last_trade, message.mkt_closed,
         ), "QuerySpreadResponseMsg"
     elif t is _MarketOrderMsg:
         kind, payload, type_name, order_id = 9, message.order, "MarketOrderMsg", message.order.order_id
@@ -1111,7 +1143,16 @@ def kernel_runner(self, agent_actions=None):
                 ledger.append(entry)
                 if delivered is not None:
                     delivered.append(entry)
-            wakeup_result = agents[recipient_id].wakeup(self.current_time)
+            agent = agents[recipient_id]
+            cw = getattr(agent, "_c_wakeup", None)
+            if cw is None:
+                cw = 1 if getattr(agent, "interval_ns", None) is not None else 0
+                agent._c_wakeup = cw
+            if cw:
+                sched_wakeup(agent, self.current_time)
+                wakeup_result = None
+            else:
+                wakeup_result = agent.wakeup(self.current_time)
             agent_times[recipient_id] += (
                 delays[recipient_id] + self.current_agent_additional_delay
             )
@@ -1176,6 +1217,10 @@ def kernel_runner(self, agent_actions=None):
         if kind == 5 or kind == 6 or kind == 7 or kind == 9:
             exch_receive_compact(
                 agents[recipient_id], self.current_time, sender_id, kind, payload, mid
+            )
+        elif kind == 2 or kind == 3 or kind == 4 or kind == 8:
+            sched_receive_compact(
+                agents[recipient_id], self.current_time, sender_id, kind, payload
             )
         else:
             agents[recipient_id].receive_message(
@@ -1278,22 +1323,28 @@ def exch_receive_message(self, current_time, sender_id, message):
     return _py_exch_recv_fallback(self, current_time, sender_id, message)
 
 
-def exch_receive_compact(self, current_time, sender_id, kind, payload, mid):
+cdef void _exch_receive_compact(object self, object current_time, object sender_id, int kind, object payload, object mid) except *:
     # QueryMsg is allowed after close (final spread + mkt_closed=True).
     # Limit/cancel/market after close must become MarketClosedMsg via the
     # original ExchangeAgent — that is the Step 3 miss if we answer them
     # with a False QuerySpreadResponse.
     closed = current_time > self.mkt_close
     if closed and kind != 7:
-        return _py_exch_recv_fallback(
+        if kind == 5:
+            payload = _as_limit(payload)
+        _py_exch_recv_fallback(
             self, current_time, sender_id, _materialize(kind, payload, mid)
         )
+        return
     self.current_time = current_time
     self.kernel.agent_computation_delays[self.id] = self.computation_delay
     if kind == 5:
-        book = self.order_books.get(payload.symbol)
+        order = _as_limit(payload)
+        book = self.order_books.get(order.symbol)
         if book is not None:
-            book.handle_limit_order(cheap_clone(payload))
+            # Hop is a field tuple; reconstruct here. Do not cheap_clone —
+            # this object is not the agent's self.orders entry.
+            book.handle_limit_order(order)
             if self.data_subscriptions:
                 self.publish_order_book_data()
         return
@@ -1301,7 +1352,7 @@ def exch_receive_compact(self, current_time, sender_id, kind, payload, mid):
         symbol, depth = payload
         book = self.order_books.get(symbol)
         if book is not None:
-            send_compact(
+            _send_compact(
                 self.kernel,
                 self.id,
                 sender_id,
@@ -1323,20 +1374,25 @@ def exch_receive_compact(self, current_time, sender_id, kind, payload, mid):
         order, tag, metadata = payload
         book = self.order_books.get(order.symbol)
         if book is not None:
-            book.cancel_order(cheap_clone(order), tag, metadata)
+            # Cancel looks up by order_id; incoming object is not mutated.
+            book.cancel_order(order, tag, metadata)
             if self.data_subscriptions:
                 self.publish_order_book_data()
         return
     if kind == 9:
         book = self.order_books.get(payload.symbol)
         if book is not None:
-            book.handle_market_order(cheap_clone(payload))
+            book.handle_market_order(payload)
             if self.data_subscriptions:
                 self.publish_order_book_data()
         return
 
 
-def sched_wakeup(self, current_time):
+def exch_receive_compact(self, current_time, sender_id, kind, payload, mid):
+    _exch_receive_compact(self, current_time, sender_id, kind, payload, mid)
+
+
+cdef void _sched_wakeup(object self, object current_time) except *:
     self.current_time = current_time
     if self.first_wake:
         self.first_wake = False
@@ -1357,27 +1413,31 @@ def sched_wakeup(self, current_time):
     if not self.mkt_close or self.mkt_closed:
         return
     self.kernel.set_wakeup(self.id, current_time + self.interval_ns)
-    send_compact(
+    _send_compact(
         self.kernel, self.id, self.exchange_id, 7, (self.symbol, 1),
         0, "QuerySpreadMsg", None,
     )
     self.state = "AWAITING_SPREAD"
 
 
-def place_limit_order(
-    self,
-    symbol,
-    quantity,
-    side,
-    limit_price,
-    order_id=None,
-    is_hidden=False,
-    is_price_to_comply=False,
-    insert_by_id=False,
-    is_post_only=False,
-    ignore_risk=True,
-    tag=None,
-):
+def sched_wakeup(self, current_time):
+    _sched_wakeup(self, current_time)
+
+
+cdef void _place_limit_order(
+    object self,
+    object symbol,
+    object quantity,
+    object side,
+    object limit_price,
+    object order_id=None,
+    bint is_hidden=False,
+    bint is_price_to_comply=False,
+    bint insert_by_id=False,
+    bint is_post_only=False,
+    bint ignore_risk=True,
+    object tag=None,
+) except *:
     if quantity <= 0:
         return
     if not ignore_risk:
@@ -1414,9 +1474,31 @@ def place_limit_order(
         order.is_price_to_comply = is_price_to_comply
         order.insert_by_id = insert_by_id
         order.is_post_only = is_post_only
-    self.orders[order.order_id] = cheap_clone(order)
-    send_compact(
-        self.kernel, self.id, self.exchange_id, 5, order, 0, "LimitOrderMsg", order.order_id
+    # Agent keeps this object. Hop is a field tuple so matching cannot
+    # mutate self.orders (execute_order would otherwise double-decrement).
+    self.orders[order.order_id] = order
+    _send_compact(
+        self.kernel,
+        self.id,
+        self.exchange_id,
+        5,
+        (
+            order.agent_id,
+            order.time_placed,
+            order.symbol,
+            order.quantity,
+            order.side,
+            order.limit_price,
+            order.order_id,
+            order.tag,
+            order.is_hidden,
+            order.is_price_to_comply,
+            order.insert_by_id,
+            order.is_post_only,
+        ),
+        0,
+        "LimitOrderMsg",
+        order.order_id,
     )
     if self.log_orders:
         tr = getattr(self.kernel, "_col_trace", None)
@@ -1444,7 +1526,28 @@ def place_limit_order(
             )
 
 
-def noise_act(self):
+def place_limit_order(
+    self,
+    symbol,
+    quantity,
+    side,
+    limit_price,
+    order_id=None,
+    is_hidden=False,
+    is_price_to_comply=False,
+    insert_by_id=False,
+    is_post_only=False,
+    ignore_risk=True,
+    tag=None,
+):
+    _place_limit_order(
+        self, symbol, quantity, side, limit_price, order_id,
+        is_hidden, is_price_to_comply, insert_by_id, is_post_only,
+        ignore_risk, tag,
+    )
+
+
+cdef void _noise_act(object self) except *:
     symbol = self.symbol
     bids = self.known_bids.get(symbol)
     asks = self.known_asks.get(symbol)
@@ -1456,17 +1559,21 @@ def noise_act(self):
     offset = int(mt.randint(0, self.price_offset_ticks + 1))
     if buy:
         anchor = int(ask) if ask else (int(bid) if bid else self.reference_price)
-        place_limit_order(self, symbol, size, _BID, anchor + offset)
+        _place_limit_order(self, symbol, size, _BID, anchor + offset)
     else:
         anchor = int(bid) if bid else (int(ask) if ask else self.reference_price)
-        place_limit_order(self, symbol, size, _ASK, anchor - offset)
+        _place_limit_order(self, symbol, size, _ASK, anchor - offset)
+
+
+def noise_act(self):
+    _noise_act(self)
 
 
 def ta_cancel_order(self, order, tag=None, metadata=None):
     """TradingAgent.cancel_order — compact CancelOrderMsg hop."""
     if type(order) is not _LimitOrder:
         return
-    send_compact(
+    _send_compact(
         self.kernel,
         self.id,
         self.exchange_id,
@@ -1484,7 +1591,7 @@ def cancel_all_orders(self):
             ta_cancel_order(self, order)
 
 
-def mm_act(self):
+cdef void _mm_act(object self) except *:
     symbol = self.symbol
     bids = self.known_bids.get(symbol)
     asks = self.known_asks.get(symbol)
@@ -1495,11 +1602,15 @@ def mm_act(self):
     half = self.spread_ticks // 2
     size = self.size_per_level
     for lvl in range(self.depth_levels):
-        place_limit_order(self, symbol, size, _BID, mid - half - lvl)
-        place_limit_order(self, symbol, size, _ASK, mid + half + lvl)
+        _place_limit_order(self, symbol, size, _BID, mid - half - lvl)
+        _place_limit_order(self, symbol, size, _ASK, mid + half + lvl)
 
 
-def value_act(self):
+def mm_act(self):
+    _mm_act(self)
+
+
+cdef void _value_act(object self) except *:
     symbol = self.symbol
     bids = self.known_bids.get(symbol)
     asks = self.known_asks.get(symbol)
@@ -1526,12 +1637,16 @@ def value_act(self):
         fundamental = int(r_t)
     size = int(max(1, round(self.order_size_mean)))
     if mid < fundamental - self.threshold_ticks and ask:
-        place_limit_order(self, symbol, size, _BID, int(ask))
+        _place_limit_order(self, symbol, size, _BID, int(ask))
     elif mid > fundamental + self.threshold_ticks and bid:
-        place_limit_order(self, symbol, size, _ASK, int(bid))
+        _place_limit_order(self, symbol, size, _ASK, int(bid))
 
 
-def momentum_act(self):
+def value_act(self):
+    _value_act(self)
+
+
+cdef void _momentum_act(object self) except *:
     symbol = self.symbol
     bids = self.known_bids.get(symbol)
     asks = self.known_asks.get(symbol)
@@ -1554,9 +1669,160 @@ def momentum_act(self):
     past = hist[0]
     size = int(max(1, round(self.order_size_mean)))
     if mid > past + self.threshold_ticks and ask:
-        place_limit_order(self, symbol, size, _BID, int(ask))
+        _place_limit_order(self, symbol, size, _BID, int(ask))
     elif mid < past - self.threshold_ticks and bid:
-        place_limit_order(self, symbol, size, _ASK, int(bid))
+        _place_limit_order(self, symbol, size, _ASK, int(bid))
+
+
+def momentum_act(self):
+    _momentum_act(self)
+
+
+cdef int _act_code(object agent) except -1:
+    obj = getattr(agent, "_c_act", None)
+    if obj is not None:
+        return <int>obj
+    name = type(agent).__name__
+    cdef int k
+    if name == "NoiseTrader":
+        k = 1
+    elif name == "MarketMaker":
+        k = 2
+    elif name == "ValueTrader":
+        k = 3
+    elif name == "MomentumTrader":
+        k = 4
+    else:
+        k = 0
+    agent._c_act = k
+    return k
+
+
+cdef void _dispatch_act(object agent) except *:
+    cdef int k = _act_code(agent)
+    if k == 1:
+        _noise_act(agent)
+    elif k == 2:
+        _mm_act(agent)
+    elif k == 3:
+        _value_act(agent)
+    elif k == 4:
+        _momentum_act(agent)
+    else:
+        agent.act()
+
+
+cdef void _ta_order_executed(object self, object order) except *:
+    if self.log_orders:
+        tr = getattr(self.kernel, "_col_trace", None)
+        side = "BID" if order.side is _BID else "ASK"
+        px = 0 if order.fill_price is None else order.fill_price
+        if tr is not None:
+            tr.add_order(
+                self.current_time, "ORDER_EXECUTED", order.agent_id,
+                side, px, order.quantity, order.order_id,
+            )
+        else:
+            self.log.append(
+                (
+                    self.current_time, "ORDER_EXECUTED", order.agent_id,
+                    side, px, order.quantity, order.order_id,
+                )
+            )
+    qty = order.quantity if order.side is _BID else -order.quantity
+    sym = order.symbol
+    holdings = self.holdings
+    if sym in holdings:
+        holdings[sym] += qty
+    else:
+        holdings[sym] = qty
+    if holdings[sym] == 0:
+        del holdings[sym]
+    holdings["CASH"] -= qty * order.fill_price
+    oid = order.order_id
+    orders = self.orders
+    if oid in orders:
+        o = orders[oid]
+        if order.quantity >= o.quantity:
+            del orders[oid]
+        else:
+            o.quantity -= order.quantity
+
+
+cdef void _ta_order_accepted(object self, object order) except *:
+    if self.log_orders:
+        tr = getattr(self.kernel, "_col_trace", None)
+        side = "BID" if order.side is _BID else "ASK"
+        if tr is not None:
+            tr.add_order(
+                self.current_time, "ORDER_ACCEPTED", order.agent_id,
+                side, order.limit_price, order.quantity, order.order_id,
+            )
+        else:
+            self.log.append(
+                (
+                    self.current_time, "ORDER_ACCEPTED", order.agent_id,
+                    side, order.limit_price, order.quantity, order.order_id,
+                )
+            )
+
+
+cdef void _ta_order_cancelled(object self, object order) except *:
+    if self.log_orders:
+        tr = getattr(self.kernel, "_col_trace", None)
+        side = "BID" if order.side is _BID else "ASK"
+        if tr is not None:
+            tr.add_order(
+                self.current_time, "ORDER_CANCELLED", order.agent_id,
+                side, order.limit_price, order.quantity, order.order_id,
+            )
+        else:
+            self.log.append(
+                (
+                    self.current_time, "ORDER_CANCELLED", order.agent_id,
+                    side, order.limit_price, order.quantity, order.order_id,
+                )
+            )
+    oid = order.order_id
+    orders = self.orders
+    if oid in orders:
+        del orders[oid]
+
+
+cdef void _sched_receive_compact(object self, object current_time, object sender_id, int kind, object payload) except *:
+    """Dispatch exec/accept/cancel/spread without allocating a Python Message."""
+    self.current_time = current_time
+    if kind == 8:
+        # payload: (symbol, depth, bids, asks, last_trade, mkt_closed)
+        mkt_closed = bool(payload[5]) if len(payload) > 5 else False
+        if mkt_closed:
+            self.mkt_closed = True
+        symbol = payload[0]
+        last_trade = payload[4]
+        self.last_trade[symbol] = last_trade
+        if self.mkt_closed:
+            self.daily_close_price[symbol] = last_trade
+        self.known_bids[symbol] = payload[2]
+        self.known_asks[symbol] = payload[3]
+        self.book = ""
+        if self.state == "AWAITING_SPREAD":
+            if not self.mkt_closed:
+                _dispatch_act(self)
+            self.state = "AWAITING_WAKEUP"
+        return
+    if kind == 2:
+        _ta_order_executed(self, payload)
+        return
+    if kind == 3:
+        _ta_order_accepted(self, payload)
+        return
+    if kind == 4:
+        _ta_order_cancelled(self, payload)
+        return
+
+
+def sched_receive_compact(self, current_time, sender_id, kind, payload):
+    _sched_receive_compact(self, current_time, sender_id, kind, payload)
 
 
 def sched_receive_message(self, current_time, sender_id, message):

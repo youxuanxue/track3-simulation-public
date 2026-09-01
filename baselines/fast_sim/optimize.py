@@ -1143,5 +1143,23 @@ def slim_exchange(exchange: Any) -> None:
 
 
 def slim_agents(agents: list[Any]) -> None:
+    from abides_fork.agents import MarketMaker, MomentumTrader, NoiseTrader, ValueTrader
+
     for agent in agents:
         agent.log_to_file = False
+        t = type(agent)
+        if t is NoiseTrader:
+            agent._c_act = 1
+            agent._c_wakeup = 1
+        elif t is MarketMaker:
+            agent._c_act = 2
+            agent._c_wakeup = 1
+        elif t is ValueTrader:
+            agent._c_act = 3
+            agent._c_wakeup = 1
+        elif t is MomentumTrader:
+            agent._c_act = 4
+            agent._c_wakeup = 1
+        elif getattr(agent, "interval_ns", None) is not None:
+            agent._c_wakeup = 1
+            agent._c_act = 0

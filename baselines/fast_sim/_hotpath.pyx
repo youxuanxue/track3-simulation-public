@@ -13,6 +13,29 @@ _OrderCancelledMsg = None
 _PriceLevel = None
 _MessageBatch = None
 _WakeupMsg = None
+_Message = None
+
+
+def make_order_msg(cls, order):
+    """Same fields + ``message_id`` as the dataclass, without ``__post_init__``."""
+    m = cls.__new__(cls)
+    m.order = order
+    mid = _Message._Message__message_id_counter
+    m.message_id = mid
+    _Message._Message__message_id_counter = mid + 1
+    return m
+
+
+def make_empty_msg(cls):
+    m = cls.__new__(cls)
+    mid = _Message._Message__message_id_counter
+    m.message_id = mid
+    _Message._Message__message_id_counter = mid + 1
+    return m
+
+
+def _exch_kernel_send(owner, recipient_id, message):
+    owner.kernel.send_message(owner.id, recipient_id, message, delay=owner.pipeline_delay)
 
 
 def cheap_clone(order):
@@ -115,8 +138,8 @@ def execute_order(self, order):
     order.quantity -= filled_order.quantity
 
     owner = self.owner
-    owner.send_message(matched_order.agent_id, _OrderExecutedMsg(matched_order))
-    owner.send_message(order.agent_id, _OrderExecutedMsg(filled_order))
+    _exch_kernel_send(owner, matched_order.agent_id, make_order_msg(_OrderExecutedMsg, matched_order))
+    _exch_kernel_send(owner, order.agent_id, make_order_msg(_OrderExecutedMsg, filled_order))
     return matched_order
 
 
@@ -189,8 +212,10 @@ def handle_limit_order(self, order, quiet=False):
                         continue
                     if stp_policy != "cancel_oldest":
                         if not quiet:
-                            owner.send_message(
-                                order.agent_id, _OrderCancelledMsg(cheap_clone(order))
+                            _exch_kernel_send(
+                                owner,
+                                order.agent_id,
+                                make_order_msg(_OrderCancelledMsg, cheap_clone(order)),
                             )
                         break
 
@@ -202,21 +227,19 @@ def handle_limit_order(self, order, quiet=False):
         else:
             self.enter_order(cheap_clone(order), quiet=quiet)
             if not quiet:
-                owner.send_message(order.agent_id, _OrderAcceptedMsg(order))
+                _exch_kernel_send(
+                    owner, order.agent_id, make_order_msg(_OrderAcceptedMsg, order)
+                )
             break
 
+    log = owner.log
+    now = owner.current_time
     if self.bids:
         b0 = self.bids[0]
-        owner.logEvent(
-            "BEST_BID",
-            "{},{},{}".format(self.symbol, b0.price, b0.total_quantity),
-        )
+        log.append((now, "BEST_BID", b0.price, b0.total_quantity))
     if self.asks:
         a0 = self.asks[0]
-        owner.logEvent(
-            "BEST_ASK",
-            "{},{},{}".format(self.symbol, a0.price, a0.total_quantity),
-        )
+        log.append((now, "BEST_ASK", a0.price, a0.total_quantity))
 
     if executed:
         trade_qty = 0
@@ -252,8 +275,10 @@ def handle_market_order(self, order):
                 if stp_policy == "cancel_oldest" and self.cancel_order(opp[0].peek()[0]):
                     continue
                 if stp_policy != "cancel_oldest":
-                    owner.send_message(
-                        order.agent_id, _OrderCancelledMsg(cheap_clone(order))
+                    _exch_kernel_send(
+                        owner,
+                        order.agent_id,
+                        make_order_msg(_OrderCancelledMsg, cheap_clone(order)),
                     )
                     break
         if self.execute_order(order) is None:
@@ -301,6 +326,23 @@ def send_message(self, sender_id, recipient_id, message, delay=0):
         ledger.append(entry)
         if pending is not None:
             pending[(lm.message_id, recipient_id)] = entry
+
+
+def set_wakeup(self, sender_id, requested_time=None):
+    if requested_time is None:
+        requested_time = self.current_time + 1
+    if self.current_time and requested_time < self.current_time:
+        raise ValueError(
+            "set_wakeup() called with requested time not in future",
+            "current_time:",
+            self.current_time,
+            "requested_time:",
+            requested_time,
+        )
+    heappush(
+        self.messages.queue,
+        (requested_time, (sender_id, sender_id, make_empty_msg(_WakeupMsg))),
+    )
 
 
 def kernel_runner(self, agent_actions=None):
@@ -389,12 +431,12 @@ def kernel_runner(self, agent_actions=None):
 def apply_hotpath_patches():
     global _APPLIED, _LimitOrder, _MarketOrder
     global _OrderExecutedMsg, _OrderAcceptedMsg, _OrderCancelledMsg
-    global _PriceLevel, _MessageBatch, _WakeupMsg
+    global _PriceLevel, _MessageBatch, _WakeupMsg, _Message
     if _APPLIED:
         return
 
     from abides_core.kernel import Kernel
-    from abides_core.message import MessageBatch, WakeupMsg
+    from abides_core.message import Message, MessageBatch, WakeupMsg
     from abides_fork.config import ScenarioLatencyModel
     from abides_markets.agents import exchange_agent as ea_mod
     from abides_markets.agents import trading_agent as ta_mod
@@ -415,12 +457,14 @@ def apply_hotpath_patches():
     _PriceLevel = PriceLevel
     _MessageBatch = MessageBatch
     _WakeupMsg = WakeupMsg
+    _Message = Message
 
     OrderBook.execute_order = execute_order
     OrderBook.enter_order = enter_order
     OrderBook.handle_limit_order = handle_limit_order
     OrderBook.handle_market_order = handle_market_order
     Kernel.send_message = send_message
+    Kernel.set_wakeup = set_wakeup
     Kernel.runner = kernel_runner
     ScenarioLatencyModel.get_latency = get_latency
     ea_mod.deepcopy = _cheap_or_deepcopy

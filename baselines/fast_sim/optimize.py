@@ -60,8 +60,46 @@ def _filtered_log_event(
     append_summary_log: bool = False,
     deepcopy_event: bool = True,
 ) -> None:
-    """Keep only events that feed the canonical 7-column trace."""
+    """Keep only events that feed the canonical 7-column trace.
+
+    Order rows become ``(t, type, agent_id, side, price, size, order_id)``;
+    quotes become ``(t, BEST_BID|BEST_ASK, price, size)``.
+    """
+    if event_type == "BEST_BID" or event_type == "BEST_ASK":
+        if isinstance(event, str):
+            parts = event.split(",")
+            if len(parts) == 3:
+                try:
+                    self.log.append(
+                        (self.current_time, event_type, int(parts[1]), int(parts[2]))
+                    )
+                    return
+                except (TypeError, ValueError):
+                    pass
+        return
     if event_type not in _TRACE_EVENT_TYPES:
+        return
+    if isinstance(event, dict):
+        oid = event.get("order_id")
+        if oid is None:
+            return
+        px = (
+            event.get("fill_price")
+            if event_type == "ORDER_EXECUTED"
+            else event.get("limit_price")
+        )
+        side = event.get("side")
+        self.log.append(
+            (
+                self.current_time,
+                event_type,
+                int(event.get("agent_id", self.id)),
+                getattr(side, "value", side),
+                0 if px is None else int(px),
+                0 if event.get("quantity") is None else int(event["quantity"]),
+                int(oid),
+            )
+        )
         return
     self.log.append((self.current_time, event_type, event))
 
@@ -143,6 +181,7 @@ def apply_runtime_patches() -> None:
     apply_hotpath_patches()
     _apply_phase3_patches()
     _apply_phase4_patches()
+    _apply_phase5_patches()
 
     _APPLIED = True
 
@@ -506,6 +545,358 @@ def _apply_phase4_patches() -> None:
     TradingAgent.receive_message = ta_receive_message  # type: ignore[method-assign]
     ScheduledAgent.receive_message = sched_receive_message  # type: ignore[method-assign]
     PriceLevel.__init__ = price_level_init  # type: ignore[method-assign]
+
+
+def _apply_phase5_patches() -> None:
+    """Cut the post-Phase-4 hot spots: message/order construction, agent
+    wakeup/act/place, compact extract rows, Exchange send billed through
+    ``kernel.send_message`` (book path already inlined in the hot path).
+    """
+    from abides_core.message import Message
+    from abides_fork.agents import NoiseTrader, ScheduledAgent
+    from abides_markets.agents.exchange_agent import ExchangeAgent
+    from abides_markets.agents.trading_agent import TradingAgent
+    from abides_markets.messages.market import (
+        MarketClosePriceRequestMsg,
+        MarketHoursMsg,
+        MarketHoursRequestMsg,
+    )
+    from abides_markets.messages.order import CancelOrderMsg, LimitOrderMsg, MarketOrderMsg
+    from abides_markets.messages.query import QuerySpreadMsg, QuerySpreadResponseMsg
+    from abides_markets.order_book import OrderBook
+    from abides_markets.orders import LimitOrder, Order, Side
+
+    try:
+        from fast_sim._hotpath import cheap_clone
+    except ImportError:
+        from fast_sim.hotpath import cheap_clone
+
+    _BID = Side.BID
+    _ASK = Side.ASK
+    _orig_exch_recv = ExchangeAgent.receive_message
+    _clone = cheap_clone
+
+    def _next_mid() -> int:
+        mid = Message._Message__message_id_counter
+        Message._Message__message_id_counter = mid + 1
+        return mid
+
+    def _fast_order_msg(cls: Any, order: Any) -> Any:
+        m = cls.__new__(cls)
+        m.order = order
+        m.message_id = _next_mid()
+        return m
+
+    def _fast_empty_msg(cls: Any) -> Any:
+        m = cls.__new__(cls)
+        m.message_id = _next_mid()
+        return m
+
+    def _fast_query_spread_msg(symbol: str, depth: int) -> Any:
+        m = QuerySpreadMsg.__new__(QuerySpreadMsg)
+        m.symbol = symbol
+        m.depth = depth
+        m.message_id = _next_mid()
+        return m
+
+    def _fast_spread_resp(
+        symbol: str, depth: int, bids: Any, asks: Any, last_trade: Any, mkt_closed: bool
+    ) -> Any:
+        m = QuerySpreadResponseMsg.__new__(QuerySpreadResponseMsg)
+        m.symbol = symbol
+        m.mkt_closed = mkt_closed
+        m.depth = depth
+        m.bids = bids
+        m.asks = asks
+        m.last_trade = last_trade
+        m.message_id = _next_mid()
+        return m
+
+    def limit_init(
+        self,
+        agent_id,
+        time_placed,
+        symbol,
+        quantity,
+        side,
+        limit_price,
+        is_hidden=False,
+        is_price_to_comply=False,
+        insert_by_id=False,
+        is_post_only=False,
+        order_id=None,
+        tag=None,
+    ) -> None:
+        self.agent_id = agent_id
+        self.time_placed = time_placed
+        self.symbol = symbol
+        self.quantity = quantity
+        self.side = side
+        if order_id is None:
+            order_id = Order._order_id_counter
+            Order._order_id_counter += 1
+        self.order_id = order_id
+        self.fill_price = None
+        self.tag = tag
+        self.limit_price = limit_price
+        self.is_hidden = is_hidden
+        self.is_price_to_comply = is_price_to_comply
+        self.insert_by_id = insert_by_id
+        self.is_post_only = is_post_only
+
+    LimitOrder.__init__ = limit_init  # type: ignore[method-assign]
+    Side.is_bid = lambda self: self is _BID  # type: ignore[method-assign]
+    Side.is_ask = lambda self: self is _ASK  # type: ignore[method-assign]
+
+    def place_limit_order(
+        self,
+        symbol,
+        quantity,
+        side,
+        limit_price,
+        order_id=None,
+        is_hidden=False,
+        is_price_to_comply=False,
+        insert_by_id=False,
+        is_post_only=False,
+        ignore_risk=True,
+        tag=None,
+    ) -> None:
+        order = self.create_limit_order(
+            symbol,
+            quantity,
+            side,
+            limit_price,
+            order_id,
+            is_hidden,
+            is_price_to_comply,
+            insert_by_id,
+            is_post_only,
+            ignore_risk,
+            tag,
+        )
+        if order is None:
+            return
+        self.orders[order.order_id] = _clone(order)
+        self.kernel.send_message(
+            self.id, self.exchange_id, _fast_order_msg(LimitOrderMsg, order), delay=0
+        )
+        if self.log_orders:
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_SUBMITTED",
+                    order.agent_id,
+                    "BID" if side is _BID else "ASK",
+                    order.limit_price,
+                    order.quantity,
+                    order.order_id,
+                )
+            )
+
+    def order_executed(self, order) -> None:
+        if self.log_orders:
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_EXECUTED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    0 if order.fill_price is None else order.fill_price,
+                    order.quantity,
+                    order.order_id,
+                )
+            )
+        qty = order.quantity if order.side is _BID else -order.quantity
+        sym = order.symbol
+        if sym in self.holdings:
+            self.holdings[sym] += qty
+        else:
+            self.holdings[sym] = qty
+        if self.holdings[sym] == 0:
+            del self.holdings[sym]
+        self.holdings["CASH"] -= qty * order.fill_price
+        if order.order_id in self.orders:
+            o = self.orders[order.order_id]
+            if order.quantity >= o.quantity:
+                del self.orders[order.order_id]
+            else:
+                o.quantity -= order.quantity
+
+    def order_accepted(self, order) -> None:
+        if self.log_orders:
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_ACCEPTED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    order.limit_price,
+                    order.quantity,
+                    order.order_id,
+                )
+            )
+
+    def order_cancelled(self, order) -> None:
+        if self.log_orders:
+            self.log.append(
+                (
+                    self.current_time,
+                    "ORDER_CANCELLED",
+                    order.agent_id,
+                    "BID" if order.side is _BID else "ASK",
+                    order.limit_price,
+                    order.quantity,
+                    order.order_id,
+                )
+            )
+        if order.order_id in self.orders:
+            del self.orders[order.order_id]
+
+    def get_current_spread(self, symbol: str, depth: int = 1) -> None:
+        self.kernel.send_message(
+            self.id, self.exchange_id, _fast_query_spread_msg(symbol, depth), delay=0
+        )
+
+    def sched_wakeup(self, current_time) -> None:
+        self.current_time = current_time
+        if self.first_wake:
+            self.first_wake = False
+            self.kernel.send_message(
+                self.id,
+                self.exchange_id,
+                _fast_empty_msg(MarketClosePriceRequestMsg),
+                delay=0,
+            )
+        if self.mkt_open is None:
+            self.kernel.send_message(
+                self.id,
+                self.exchange_id,
+                _fast_empty_msg(MarketHoursRequestMsg),
+                delay=0,
+            )
+            return
+        if not self.mkt_close or self.mkt_closed:
+            return
+        self.kernel.set_wakeup(self.id, current_time + self.interval_ns)
+        self.kernel.send_message(
+            self.id, self.exchange_id, _fast_query_spread_msg(self.symbol, 1), delay=0
+        )
+        self.state = "AWAITING_SPREAD"
+
+    def noise_act(self) -> None:
+        symbol = self.symbol
+        bids = self.known_bids.get(symbol)
+        asks = self.known_asks.get(symbol)
+        bid = bids[0][0] if bids else None
+        ask = asks[0][0] if asks else None
+        rs = self.random_state
+        size = int(
+            max(1, round(rs.normal(self.order_size_mean, self.order_size_std)))
+        )
+        buy = bool(rs.randint(0, 2))
+        offset = int(rs.randint(0, self.price_offset_ticks + 1))
+        if buy:
+            anchor = int(ask) if ask else (int(bid) if bid else self.reference_price)
+            self.place_limit_order(symbol, size, _BID, anchor + offset)
+        else:
+            anchor = int(bid) if bid else (int(ask) if ask else self.reference_price)
+            self.place_limit_order(symbol, size, _ASK, anchor - offset)
+
+    def exch_receive_message(self, current_time, sender_id: int, message) -> None:
+        if current_time > self.mkt_close:
+            return _orig_exch_recv(self, current_time, sender_id, message)
+
+        self.current_time = current_time
+        self.kernel.agent_computation_delays[self.id] = self.computation_delay
+
+        t = type(message)
+        if t is LimitOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.handle_limit_order(_clone(order))
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        if t is QuerySpreadMsg:
+            book = self.order_books.get(message.symbol)
+            if book is not None:
+                depth = message.depth
+                self.kernel.send_message(
+                    self.id,
+                    sender_id,
+                    _fast_spread_resp(
+                        message.symbol,
+                        depth,
+                        book.get_l2_bid_data(depth),
+                        book.get_l2_ask_data(depth),
+                        book.last_trade,
+                        False,
+                    ),
+                    delay=0,
+                )
+            return
+        if t is CancelOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.cancel_order(_clone(order), message.tag, message.metadata)
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        if t is MarketHoursRequestMsg:
+            self.kernel.agent_computation_delays[self.id] = 0
+            self.kernel.send_message(
+                self.id, sender_id, MarketHoursMsg(self.mkt_open, self.mkt_close), delay=0
+            )
+            return
+        if t is MarketOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.handle_market_order(_clone(order))
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        return _orig_exch_recv(self, current_time, sender_id, message)
+
+    def get_l2_bid_data(self, depth: int = sys.maxsize):
+        out = []
+        bids = self.bids
+        n = len(bids)
+        if depth < n:
+            n = depth
+        for i in range(n):
+            pl = bids[i]
+            q = pl._visible_qty
+            if q > 0:
+                out.append((pl.price, q))
+        return out
+
+    def get_l2_ask_data(self, depth: int = sys.maxsize):
+        out = []
+        asks = self.asks
+        n = len(asks)
+        if depth < n:
+            n = depth
+        for i in range(n):
+            pl = asks[i]
+            q = pl._visible_qty
+            if q > 0:
+                out.append((pl.price, q))
+        return out
+
+    TradingAgent.place_limit_order = place_limit_order  # type: ignore[method-assign]
+    TradingAgent.order_executed = order_executed  # type: ignore[method-assign]
+    TradingAgent.order_accepted = order_accepted  # type: ignore[method-assign]
+    TradingAgent.order_cancelled = order_cancelled  # type: ignore[method-assign]
+    TradingAgent.get_current_spread = get_current_spread  # type: ignore[method-assign]
+    ScheduledAgent.wakeup = sched_wakeup  # type: ignore[method-assign]
+    NoiseTrader.act = noise_act  # type: ignore[method-assign]
+    ExchangeAgent.receive_message = exch_receive_message  # type: ignore[method-assign]
+    OrderBook.get_l2_bid_data = get_l2_bid_data  # type: ignore[method-assign]
+    OrderBook.get_l2_ask_data = get_l2_ask_data  # type: ignore[method-assign]
 
 
 def slim_exchange(exchange: Any) -> None:

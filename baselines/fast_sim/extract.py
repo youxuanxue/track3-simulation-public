@@ -72,7 +72,13 @@ def _stable_lexsort(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
 
 
 def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:
-    """Canonical 7-column trace from agent ``.log`` lists."""
+    """Canonical 7-column trace from agent ``.log`` lists.
+
+    Phase 5 compact rows:
+      order: ``(t, event_type, agent_id, side, price, size, order_id)``
+      quote: ``(t, "BEST_BID"|"BEST_ASK", price, size)``
+    Legacy 3-tuples ``(t, event_type, dict|str)`` are still accepted.
+    """
     t_ns: list[int] = []
     agent_ids: list[int] = []
     event_types: list[str] = []
@@ -88,41 +94,62 @@ def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:
 
     for agent in agents:
         aid = int(agent.id)
-        for event_time, event_type, event in agent.log:
-            if event_type == "ORDER_EXECUTED" or event_type in _ORDER_EVENT_MAP:
-                if not isinstance(event, dict):
-                    continue
-                oid = event.get("order_id")
+        for row in agent.log:
+            n = len(row)
+            if n == 7:
+                event_time, event_type, ev_aid, side, px, sz, oid = row
                 if oid is None:
                     continue
-                t_ns.append(int(event_time))
-                agent_ids.append(int(event.get("agent_id", aid)))
+                t_ns.append(event_time)
+                agent_ids.append(ev_aid)
                 event_types.append(event_type)
-                sides.append(event.get("side"))
-                if event_type == "ORDER_EXECUTED":
-                    fp = event.get("fill_price")
-                    prices.append(0 if fp is None else int(fp))
-                else:
-                    lp = event.get("limit_price")
-                    prices.append(0 if lp is None else int(lp))
-                q = event.get("quantity")
-                sizes.append(0 if q is None else int(q))
-                order_ids.append(int(oid))
-            elif event_type == "BEST_BID" or event_type == "BEST_ASK":
-                text = event if isinstance(event, str) else str(event)
-                parts = text.split(",")
-                if len(parts) != 3:
-                    continue
-                try:
-                    q_price = int(parts[1])
-                    q_size = int(parts[2])
-                except (TypeError, ValueError):
-                    continue
-                quote_t.append(int(event_time))
-                quote_aid.append(int(aid))
+                sides.append(side)
+                prices.append(px)
+                sizes.append(sz)
+                order_ids.append(oid)
+            elif n == 4:
+                event_time, event_type, q_price, q_size = row
+                quote_t.append(event_time)
+                quote_aid.append(aid)
                 quote_side.append("BID" if event_type == "BEST_BID" else "ASK")
                 quote_px.append(q_price)
                 quote_sz.append(q_size)
+            else:
+                event_time, event_type, event = row
+                if event_type == "ORDER_EXECUTED" or event_type in _ORDER_EVENT_MAP:
+                    if not isinstance(event, dict):
+                        continue
+                    oid = event.get("order_id")
+                    if oid is None:
+                        continue
+                    t_ns.append(int(event_time))
+                    agent_ids.append(int(event.get("agent_id", aid)))
+                    event_types.append(event_type)
+                    sides.append(event.get("side"))
+                    if event_type == "ORDER_EXECUTED":
+                        fp = event.get("fill_price")
+                        prices.append(0 if fp is None else int(fp))
+                    else:
+                        lp = event.get("limit_price")
+                        prices.append(0 if lp is None else int(lp))
+                    q = event.get("quantity")
+                    sizes.append(0 if q is None else int(q))
+                    order_ids.append(int(oid))
+                elif event_type == "BEST_BID" or event_type == "BEST_ASK":
+                    text = event if isinstance(event, str) else str(event)
+                    parts = text.split(",")
+                    if len(parts) != 3:
+                        continue
+                    try:
+                        q_price = int(parts[1])
+                        q_size = int(parts[2])
+                    except (TypeError, ValueError):
+                        continue
+                    quote_t.append(int(event_time))
+                    quote_aid.append(int(aid))
+                    quote_side.append("BID" if event_type == "BEST_BID" else "ASK")
+                    quote_px.append(q_price)
+                    quote_sz.append(q_size)
 
     if t_ns:
         t_arr = np.fromiter(t_ns, dtype=np.int64, count=len(t_ns))

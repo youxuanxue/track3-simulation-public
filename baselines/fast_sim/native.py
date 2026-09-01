@@ -80,6 +80,46 @@ def _latency_spec(model: Any) -> dict[str, Any]:
     }
 
 
+def _oracle_spec(oracle: Any) -> dict[str, Any] | None:
+    """Snapshot SparseMeanRevertingOracle after ``__init__`` (first megashock done)."""
+    if oracle is None:
+        return None
+    import math
+
+    import numpy as np
+
+    sym = oracle.symbols["ABM"]
+    pt, pv = oracle.r["ABM"]
+    ms = oracle.megashocks["ABM"][-1]
+    jumps = []
+    for jump in sym.get("scheduled_jumps") or []:
+        jumps.append(
+            {
+                "time_ns": int(jump["time_ns"]),
+                "magnitude": int(jump["magnitude"]),
+                "consumed": bool(jump.get("_consumed")),
+            }
+        )
+    glob = np.random.RandomState()
+    glob.set_state(np.random.get_state())
+    return {
+        "mkt_close": int(oracle.mkt_close),
+        "pt": float(pt),
+        "pv": float(pv),
+        "r_bar": float(sym["r_bar"]),
+        "kappa": float(sym["kappa"]),
+        "fund_vol": float(sym["fund_vol"]),
+        "ms_lambda": float(sym["megashock_lambda_a"]),
+        "ms_mean": float(sym["megashock_mean"]),
+        "ms_scale": float(math.sqrt(sym["megashock_var"])),
+        "mst": float(ms["MegashockTime"]),
+        "msv": float(ms["MegashockValue"]),
+        "jumps": jumps,
+        "random_state": sym["random_state"],
+        "global_rs": glob,
+    }
+
+
 def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
     """Pull scalar fields + RNG objects off the ABIDES config (no Kernel)."""
     agents = config["agents"]
@@ -124,8 +164,33 @@ def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
         "n_agents": len(agents),
         "agents": roster,
         "latency": _latency_spec(config["agent_latency_model"]),
-        "oracle": oracle,
+        "oracle_spec": _oracle_spec(oracle),
     }
+
+
+def as_pandas(obj: Any) -> Any:
+    """Validate / compare path only — timed ``simulate`` writes Arrow tables."""
+    if obj is None:
+        return obj
+    to_pd = getattr(obj, "to_pandas", None)
+    if callable(to_pd) and not hasattr(obj, "iloc"):
+        return to_pd()
+    return obj
+
+
+def write_parquet(obj: Any, path: Any) -> None:
+    """Write a pyarrow Table (or pandas DataFrame) without an extra frame copy."""
+    from pathlib import Path
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    schema = getattr(obj, "schema", None)
+    if schema is not None and hasattr(obj, "to_batches"):
+        import pyarrow.parquet as pq
+
+        pq.write_table(obj, path, compression="snappy")
+        return
+    obj.to_parquet(path, compression="snappy", index=False)
 
 
 def run_native(config: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:

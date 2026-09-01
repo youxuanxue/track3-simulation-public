@@ -134,6 +134,29 @@ cdef struct NAgent:
     Py_ssize_t cap_ord
 
 
+cdef struct CJump:
+    long long time_ns
+    int magnitude
+    int consumed
+
+
+cdef struct COracle:
+    int enabled
+    long long mkt_close
+    double pt
+    double pv
+    double r_bar
+    double kappa
+    double fund_vol
+    double ms_lambda
+    double ms_mean
+    double ms_scale
+    double mst
+    double msv
+    CJump jump
+    int has_jump
+
+
 cdef struct LRow:
     long long mid
     long long t_send
@@ -231,6 +254,24 @@ cdef class MT19937:
             val = self.next32() & mask
             if val <= rng:
                 return low + <long>val
+
+    cdef inline double uniform(self, double low, double high) noexcept nogil:
+        return low + (high - low) * self.next_double()
+
+    cdef inline double exponential(self, double scale) noexcept nogil:
+        return -log(1.0 - self.next_double()) * scale
+
+    cdef inline double pareto(self, double alpha) noexcept nogil:
+        return exp(-log(1.0 - self.next_double()) / alpha) - 1.0
+
+    def py_uniform(self, low, high):
+        return self.uniform(low, high)
+
+    def py_exponential(self, scale):
+        return self.exponential(scale)
+
+    def py_pareto(self, alpha):
+        return self.pareto(alpha)
 
 
 cdef inline int _event_less(Event *a, Event *b) noexcept nogil:
@@ -472,17 +513,15 @@ cdef class CTrace:
         self.qsz[i] = sz
         self.n_q = i + 1
 
-    def to_dataframe(self):
-        from fast_sim.extract import _empty_trace, _stable_lexsort
-        from abides_fork.trace import _TRACE_DTYPES
+    def to_arrays(self):
+        from fast_sim.extract import _stable_lexsort
         import numpy as np
-        import pandas as pd
 
         cdef Py_ssize_t i, n_order, n_quote, n, j
         n_order = self.n_o
         n_quote = self.n_q
         if n_order == 0 and n_quote == 0:
-            return _empty_trace()
+            return None
         if n_order:
             t_arr = np.empty(n_order, dtype=np.int64)
             aid_arr = np.empty(n_order, dtype=np.int64)
@@ -579,15 +618,47 @@ cdef class CTrace:
             sz_all[n_order:] = q_sz
             oid_all[n_order:] = -1
         idx = _stable_lexsort(t_all, oid_all)
-        return pd.DataFrame({
+        return {
             "t_ns": t_all[idx],
-            "agent_id": aid_all[idx],
+            "agent_id": aid_all[idx].astype(np.int32, copy=False),
             "msg_type": msg_all[idx],
             "side": side_all[idx],
             "price": px_all[idx],
             "size": sz_all[idx],
             "order_id": oid_all[idx],
-        }).astype(_TRACE_DTYPES, copy=False)
+        }
+
+    def to_arrow(self):
+        import pyarrow as pa
+        a = self.to_arrays()
+        if a is None:
+            return pa.table({
+                "t_ns": pa.array([], type=pa.int64()),
+                "agent_id": pa.array([], type=pa.int32()),
+                "msg_type": pa.array([], type=pa.string()),
+                "side": pa.array([], type=pa.string()),
+                "price": pa.array([], type=pa.int64()),
+                "size": pa.array([], type=pa.int64()),
+                "order_id": pa.array([], type=pa.int64()),
+            })
+        return pa.table({
+            "t_ns": a["t_ns"],
+            "agent_id": a["agent_id"],
+            "msg_type": pa.array(a["msg_type"], type=pa.string()),
+            "side": pa.array(a["side"], type=pa.string()),
+            "price": a["price"],
+            "size": a["size"],
+            "order_id": a["order_id"],
+        })
+
+    def to_dataframe(self):
+        from fast_sim.extract import _empty_trace
+        from abides_fork.trace import _TRACE_DTYPES
+        import pandas as pd
+        a = self.to_arrays()
+        if a is None:
+            return _empty_trace()
+        return pd.DataFrame(a).astype(_TRACE_DTYPES, copy=False)
 
 
 cdef class CLedger:
@@ -633,16 +704,13 @@ cdef class CLedger:
         self.n = i + 1
         return i
 
-    def to_dataframe(self):
-        from fast_sim.extract import _empty_msg, _nullable_int64
-        from abides_fork.trace import _MSG_DTYPES
+    def to_arrays(self):
         import numpy as np
-        import pandas as pd
 
         cdef Py_ssize_t i, n = self.n
         cdef LRow *r
         if n == 0:
-            return _empty_msg()
+            return None
         seq = np.empty(n, dtype=np.int64)
         mid = np.empty(n, dtype=np.int64)
         src = np.empty(n, dtype=np.int32)
@@ -675,19 +743,71 @@ cdef class CLedger:
             mtype[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
         keep = seq >= 0
         if not keep.any():
-            return _empty_msg()
+            return None
         order = np.argsort(seq[keep], kind="stable")
-        return pd.DataFrame({
+        return {
             "seq": seq[keep][order],
             "t_recv_ns": t_recv[keep][order],
-            "t_send_ns": _nullable_int64(t_send[keep][order], t_send_na[keep][order]),
+            "t_send_ns": t_send[keep][order],
+            "t_send_na": t_send_na[keep][order],
             "latency_ns": lat[keep][order],
             "src_id": src[keep][order],
             "dst_id": dst[keep][order],
             "message_id": mid[keep][order],
             "msg_type": mtype[keep][order],
-            "order_id": _nullable_int64(oid[keep][order], oid_na[keep][order]),
-            "causal_parent": _nullable_int64(parent[keep][order], parent_na[keep][order]),
+            "order_id": oid[keep][order],
+            "oid_na": oid_na[keep][order],
+            "causal_parent": parent[keep][order],
+            "parent_na": parent_na[keep][order],
+        }
+
+    def to_arrow(self):
+        import pyarrow as pa
+        a = self.to_arrays()
+        if a is None:
+            return pa.table({
+                "seq": pa.array([], type=pa.int64()),
+                "t_recv_ns": pa.array([], type=pa.int64()),
+                "t_send_ns": pa.array([], type=pa.int64()),
+                "latency_ns": pa.array([], type=pa.int64()),
+                "src_id": pa.array([], type=pa.int32()),
+                "dst_id": pa.array([], type=pa.int32()),
+                "message_id": pa.array([], type=pa.int64()),
+                "msg_type": pa.array([], type=pa.string()),
+                "order_id": pa.array([], type=pa.int64()),
+                "causal_parent": pa.array([], type=pa.int64()),
+            })
+        return pa.table({
+            "seq": a["seq"],
+            "t_recv_ns": a["t_recv_ns"],
+            "t_send_ns": pa.array(a["t_send_ns"], mask=a["t_send_na"], type=pa.int64()),
+            "latency_ns": a["latency_ns"],
+            "src_id": a["src_id"],
+            "dst_id": a["dst_id"],
+            "message_id": a["message_id"],
+            "msg_type": pa.array(a["msg_type"], type=pa.string()),
+            "order_id": pa.array(a["order_id"], mask=a["oid_na"], type=pa.int64()),
+            "causal_parent": pa.array(a["causal_parent"], mask=a["parent_na"], type=pa.int64()),
+        })
+
+    def to_dataframe(self):
+        from fast_sim.extract import _empty_msg, _nullable_int64
+        from abides_fork.trace import _MSG_DTYPES
+        import pandas as pd
+        a = self.to_arrays()
+        if a is None:
+            return _empty_msg()
+        return pd.DataFrame({
+            "seq": a["seq"],
+            "t_recv_ns": a["t_recv_ns"],
+            "t_send_ns": _nullable_int64(a["t_send_ns"], a["t_send_na"]),
+            "latency_ns": a["latency_ns"],
+            "src_id": a["src_id"],
+            "dst_id": a["dst_id"],
+            "message_id": a["message_id"],
+            "msg_type": a["msg_type"],
+            "order_id": _nullable_int64(a["order_id"], a["oid_na"]),
+            "causal_parent": _nullable_int64(a["causal_parent"], a["parent_na"]),
         }).astype(_MSG_DTYPES, copy=False)
 
 
@@ -829,6 +949,9 @@ cdef class NativeSim:
     cdef object oracle
     cdef object lat_mt
     cdef object rss
+    cdef object orc_mt
+    cdef object glob_mt
+    cdef COracle orc
     cdef long long *atime
     cdef long long *cdelay
     cdef long long now
@@ -880,6 +1003,9 @@ cdef class NativeSim:
         self.oracle = None
         self.lat_mt = None
         self.rss = []
+        self.orc_mt = None
+        self.glob_mt = None
+        self.orc.enabled = 0
 
     def __dealloc__(self):
         cdef int i
@@ -896,6 +1022,60 @@ cdef class NativeSim:
             free(self.cdelay)
         if self.subs != NULL:
             free(self.subs)
+
+    cdef int _compute_fund(self, double ts, double v_adj, double pt, double pv) except *:
+        cdef double d, mu, gamma, theta, loc, scale, v
+        cdef MT19937 mt = <MT19937>self.orc_mt
+        d = ts - pt
+        mu = self.orc.r_bar
+        gamma = self.orc.kappa
+        theta = self.orc.fund_vol
+        loc = mu + (pv - mu) * exp(-gamma * d)
+        scale = sqrt(((theta * theta) / (2.0 * gamma)) * (1.0 - exp(-2.0 * gamma * d)))
+        v = mt.normal(loc, scale) + v_adj
+        if v < 0.0:
+            v = 0.0
+        cdef int iv = int(round(v))
+        if self.orc.has_jump and (not self.orc.jump.consumed) and ts >= self.orc.jump.time_ns:
+            iv += self.orc.jump.magnitude
+            if iv < 0:
+                iv = 0
+            self.orc.jump.consumed = 1
+        self.orc.pt = ts
+        self.orc.pv = iv
+        return iv
+
+    cdef int _advance(self, long long current_time) except *:
+        cdef double pt, pv, mst, msv
+        cdef int v
+        cdef MT19937 gmt, omt
+        if not self.orc.enabled:
+            return 0
+        if current_time <= self.orc.pt:
+            return <int>self.orc.pv
+        pt = self.orc.pt
+        pv = self.orc.pv
+        mst = self.orc.mst
+        msv = self.orc.msv
+        gmt = <MT19937>self.glob_mt
+        omt = <MT19937>self.orc_mt
+        while mst < current_time:
+            v = self._compute_fund(mst, msv, pt, pv)
+            pt = mst
+            pv = v
+            mst = pt + <double>int(gmt.exponential(1.0 / self.orc.ms_lambda))
+            msv = omt.normal(self.orc.ms_mean, self.orc.ms_scale)
+            if omt.randint(0, 2) == 0:
+                msv = -msv
+            self.orc.mst = mst
+            self.orc.msv = msv
+        return self._compute_fund(<double>current_time, 0.0, pt, pv)
+
+    cdef int _observe(self, long long t) except *:
+        cdef long long ts = t
+        if t >= self.orc.mkt_close:
+            ts = self.orc.mkt_close - 1
+        return self._advance(ts)
 
     cdef void _zero_ev(self, Event *ev) noexcept:
         ev.order.time_placed = 0
@@ -915,11 +1095,13 @@ cdef class NativeSim:
         if sid == rid:
             return 0
         if self.lat_kind == LAT_UNI:
-            value = self.lat_rs.uniform(self.lat_min, self.lat_max)
+            value = (<MT19937>self.lat_mt).uniform(self.lat_min, self.lat_max)
         elif self.lat_kind == LAT_LOGN:
             value = (<MT19937>self.lat_mt).lognormal(self.lat_mu, self.lat_sigma)
         elif self.lat_kind == LAT_PARETO:
-            value = (self.lat_min if self.lat_min > 0 else 1.0) * (1.0 + self.lat_rs.pareto(self.lat_alpha))
+            value = (self.lat_min if self.lat_min > 0 else 1.0) * (
+                1.0 + (<MT19937>self.lat_mt).pareto(self.lat_alpha)
+            )
         else:
             value = self.lat_mean
         if value < self.lat_min:
@@ -1214,7 +1396,7 @@ cdef class NativeSim:
                 fmid = float(ask)
             else:
                 return
-            r_t = self.oracle.observe_price("ABM", self.now, self.rss[a.id], sigma_n=0)
+            r_t = self._observe(self.now)
             if a.sigma_n:
                 fundamental = int(round((<MT19937>self.mts[a.id]).normal(r_t, sqrt(a.sigma_n))))
             else:
@@ -1404,7 +1586,7 @@ cdef class NativeSim:
         self.pipeline = spec["pipeline_delay"]
         self.stp = spec["stp"]
         self.last_trade = spec["last_trade"]
-        self.oracle = spec.get("oracle")
+        self.oracle = None
         lat = spec["latency"]
         model = lat["model"]
         if model == "uniform":
@@ -1421,11 +1603,39 @@ cdef class NativeSim:
         self.lat_sigma = lat["sigma"]
         self.lat_mu = lat["mu"]
         self.lat_alpha = lat["alpha"]
-        self.lat_rs = lat["random_state"]
-        if self.lat_kind == LAT_LOGN:
+        self.lat_rs = None
+        mt = MT19937()
+        mt.bind_numpy(lat["random_state"])
+        self.lat_mt = mt
+        orc = spec.get("oracle_spec")
+        self.orc.enabled = 0
+        if orc is not None:
+            self.orc.enabled = 1
+            self.orc.mkt_close = orc["mkt_close"]
+            self.orc.pt = orc["pt"]
+            self.orc.pv = orc["pv"]
+            self.orc.r_bar = orc["r_bar"]
+            self.orc.kappa = orc["kappa"]
+            self.orc.fund_vol = orc["fund_vol"]
+            self.orc.ms_lambda = orc["ms_lambda"]
+            self.orc.ms_mean = orc["ms_mean"]
+            self.orc.ms_scale = orc["ms_scale"]
+            self.orc.mst = orc["mst"]
+            self.orc.msv = orc["msv"]
+            self.orc.has_jump = 0
+            self.orc.jump.consumed = 1
+            jumps = orc.get("jumps") or []
+            if jumps:
+                self.orc.has_jump = 1
+                self.orc.jump.time_ns = jumps[0]["time_ns"]
+                self.orc.jump.magnitude = jumps[0]["magnitude"]
+                self.orc.jump.consumed = 1 if jumps[0]["consumed"] else 0
             mt = MT19937()
-            mt.bind_numpy(self.lat_rs)
-            self.lat_mt = mt
+            mt.bind_numpy(orc["random_state"])
+            self.orc_mt = mt
+            mt = MT19937()
+            mt.bind_numpy(orc["global_rs"])
+            self.glob_mt = mt
         self.mts = [None] * self.n
         self.rss = [None] * self.n
         for i in range(self.n):
@@ -1517,7 +1727,7 @@ cdef class NativeSim:
                 self._agent_recv(&self.agents[rid], &ev)
 
     def result(self):
-        return self.trace.to_dataframe(), self.ledger.to_dataframe()
+        return self.trace.to_arrow(), self.ledger.to_arrow()
 
 
 def run_native_sim(spec):
@@ -1525,3 +1735,21 @@ def run_native_sim(spec):
     sim.setup(spec)
     sim.run_loop()
     return sim.result()
+
+
+def native_rng_matches_numpy(seeds=20, draws=40):
+    """True iff C uniform / exponential / pareto lock-step numpy RandomState."""
+    import numpy as np
+
+    for seed in range(seeds):
+        rs = np.random.RandomState(seed)
+        mt = MT19937()
+        mt.bind_numpy(rs)
+        for i in range(draws):
+            if mt.uniform(100.0, 2000.0) != float(rs.uniform(100.0, 2000.0)):
+                return False
+            if mt.exponential(2.5) != float(rs.exponential(scale=2.5)):
+                return False
+            if mt.pareto(1.5) != float(rs.pareto(1.5)):
+                return False
+    return True

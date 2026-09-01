@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from abides_fork.scenario_io import read_scenario
 from fast_sim.engine import run_scenario
+from fast_sim.native import write_parquet
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -29,11 +30,6 @@ def _sha256(path: pathlib.Path) -> str:
 
 def _peak_rss_bytes() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
-
-
-def _write_parquet(df, path: pathlib.Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(path, compression="snappy", index=False)
 
 
 def simulate(
@@ -53,11 +49,11 @@ def simulate(
 
     out_path = pathlib.Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_parquet(trace, out_path)
+    write_parquet(trace, out_path)
     msg_out = out_path.parent / "message_trace.parquet"
-    _write_parquet(message_trace, msg_out)
+    write_parquet(message_trace, msg_out)
 
-    n_events = int(len(trace))
+    n_events = int(trace.num_rows if hasattr(trace, "num_rows") else len(trace))
     events = {
         "scenario_id": str(scenario["scenario_id"]),
         "seed": int(scenario["seed"]),
@@ -65,7 +61,9 @@ def simulate(
         "wall_clock_sec": float(wall_clock_sec),
         "events_per_sec": float(n_events / wall_clock_sec) if wall_clock_sec > 0 else 0.0,
         "trace_sha256": _sha256(out_path),
-        "n_messages": int(len(message_trace)),
+        "n_messages": int(
+            message_trace.num_rows if hasattr(message_trace, "num_rows") else len(message_trace)
+        ),
         "message_trace_sha256": _sha256(msg_out),
         "peak_memory_bytes": peak_memory_bytes,
         "gpu_seconds": 0.0,

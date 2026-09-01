@@ -1048,6 +1048,99 @@ def noise_act(self):
         place_limit_order(self, symbol, size, _ASK, anchor - offset)
 
 
+def ta_cancel_order(self, order, tag=None, metadata=None):
+    """TradingAgent.cancel_order — LimitOrder only; same message_id assignment."""
+    if type(order) is not _LimitOrder:
+        return
+    m = _CancelOrderMsg.__new__(_CancelOrderMsg)
+    m.order = order
+    m.tag = tag
+    m.metadata = {} if metadata is None else metadata
+    mid = _Message._Message__message_id_counter
+    m.message_id = mid
+    _Message._Message__message_id_counter = mid + 1
+    self.kernel.send_message(self.id, self.exchange_id, m, delay=0)
+
+
+def cancel_all_orders(self):
+    """TradingAgent.cancel_all_orders — same iteration, LimitOrder only."""
+    for order in self.orders.values():
+        if type(order) is _LimitOrder:
+            ta_cancel_order(self, order)
+
+
+def mm_act(self):
+    """MarketMaker.act — no RNG; cancel then two-sided ladder."""
+    symbol = self.symbol
+    bids = self.known_bids.get(symbol)
+    asks = self.known_asks.get(symbol)
+    bid = bids[0][0] if bids else None
+    ask = asks[0][0] if asks else None
+    mid = int((bid + ask) // 2) if (bid and ask) else self.reference_price
+    cancel_all_orders(self)
+    half = self.spread_ticks // 2
+    size = self.size_per_level
+    for lvl in range(self.depth_levels):
+        place_limit_order(self, symbol, size, _BID, mid - half - lvl)
+        place_limit_order(self, symbol, size, _ASK, mid + half + lvl)
+
+
+def value_act(self):
+    """ValueTrader.act — oracle.observe_price keeps RandomState draw order."""
+    symbol = self.symbol
+    bids = self.known_bids.get(symbol)
+    asks = self.known_asks.get(symbol)
+    bid = bids[0][0] if bids else None
+    ask = asks[0][0] if asks else None
+    if bid and ask:
+        mid = (int(bid) + int(ask)) / 2.0
+    elif bid:
+        mid = float(bid)
+    elif ask:
+        mid = float(ask)
+    else:
+        return
+    fundamental = int(
+        self.oracle.observe_price(
+            symbol, self.current_time, self.random_state, sigma_n=self.sigma_n
+        )
+    )
+    size = int(max(1, round(self.order_size_mean)))
+    if mid < fundamental - self.threshold_ticks and ask:
+        place_limit_order(self, symbol, size, _BID, int(ask))
+    elif mid > fundamental + self.threshold_ticks and bid:
+        place_limit_order(self, symbol, size, _ASK, int(bid))
+
+
+def momentum_act(self):
+    """MomentumTrader.act — no RNG; mid-history trend."""
+    symbol = self.symbol
+    bids = self.known_bids.get(symbol)
+    asks = self.known_asks.get(symbol)
+    bid = bids[0][0] if bids else None
+    ask = asks[0][0] if asks else None
+    if bid and ask:
+        mid = (int(bid) + int(ask)) / 2.0
+    elif bid:
+        mid = float(bid)
+    elif ask:
+        mid = float(ask)
+    else:
+        return
+    hist = self._mid_history
+    hist.append(mid)
+    if len(hist) > self.lookback + 1:
+        hist.pop(0)
+    if len(hist) <= self.lookback:
+        return
+    past = hist[0]
+    size = int(max(1, round(self.order_size_mean)))
+    if mid > past + self.threshold_ticks and ask:
+        place_limit_order(self, symbol, size, _BID, int(ask))
+    elif mid < past - self.threshold_ticks and bid:
+        place_limit_order(self, symbol, size, _ASK, int(bid))
+
+
 def sched_receive_message(self, current_time, sender_id, message):
     t = type(message)
     if t is _QuerySpreadResponseMsg:

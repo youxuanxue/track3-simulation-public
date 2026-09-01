@@ -193,6 +193,7 @@ def apply_runtime_patches() -> None:
     _apply_phase5_patches()
     _apply_phase6_patches()
     _apply_step2_patches()
+    _apply_step4_patches()
 
     _APPLIED = True
 
@@ -973,6 +974,124 @@ def _apply_step2_patches() -> None:
         from fast_sim.hotpath import apply_book_patches
 
     apply_book_patches()
+
+
+def _apply_step4_patches() -> None:
+    """Compile MM / Value / Momentum act() + cancel_all_orders.
+
+    NoiseTrader.act is already compiled (Phase 6). RNG stays
+    ``numpy.random.RandomState`` / ``oracle.observe_price(..., random_state)``.
+    ``sched_receive_message`` still refuses ``act()`` when ``mkt_closed``.
+    No compact-hop retry.
+    """
+    from abides_fork.agents import MarketMaker, MomentumTrader, ValueTrader
+    from abides_markets.agents.trading_agent import TradingAgent
+    from abides_markets.orders import LimitOrder
+
+    try:
+        from fast_sim._hotpath import (
+            cancel_all_orders,
+            mm_act,
+            momentum_act,
+            ta_cancel_order,
+            value_act,
+        )
+    except ImportError:
+        from abides_core.message import Message
+        from abides_markets.messages.order import CancelOrderMsg
+        from abides_markets.orders import Side
+
+        _BID = Side.BID
+        _ASK = Side.ASK
+
+        def ta_cancel_order(self, order, tag=None, metadata=None) -> None:
+            if type(order) is not LimitOrder:
+                return
+            m = CancelOrderMsg.__new__(CancelOrderMsg)
+            m.order = order
+            m.tag = tag
+            m.metadata = {} if metadata is None else metadata
+            mid = Message._Message__message_id_counter
+            m.message_id = mid
+            Message._Message__message_id_counter = mid + 1
+            self.kernel.send_message(self.id, self.exchange_id, m, delay=0)
+
+        def cancel_all_orders(self) -> None:
+            for order in self.orders.values():
+                if type(order) is LimitOrder:
+                    ta_cancel_order(self, order)
+
+        def mm_act(self) -> None:
+            symbol = self.symbol
+            bids = self.known_bids.get(symbol)
+            asks = self.known_asks.get(symbol)
+            bid = bids[0][0] if bids else None
+            ask = asks[0][0] if asks else None
+            mid = int((bid + ask) // 2) if (bid and ask) else self.reference_price
+            cancel_all_orders(self)
+            half = self.spread_ticks // 2
+            size = self.size_per_level
+            for lvl in range(self.depth_levels):
+                self.place_limit_order(symbol, size, _BID, mid - half - lvl)
+                self.place_limit_order(symbol, size, _ASK, mid + half + lvl)
+
+        def value_act(self) -> None:
+            symbol = self.symbol
+            bids = self.known_bids.get(symbol)
+            asks = self.known_asks.get(symbol)
+            bid = bids[0][0] if bids else None
+            ask = asks[0][0] if asks else None
+            if bid and ask:
+                mid = (int(bid) + int(ask)) / 2.0
+            elif bid:
+                mid = float(bid)
+            elif ask:
+                mid = float(ask)
+            else:
+                return
+            fundamental = int(
+                self.oracle.observe_price(
+                    symbol, self.current_time, self.random_state, sigma_n=self.sigma_n
+                )
+            )
+            size = int(max(1, round(self.order_size_mean)))
+            if mid < fundamental - self.threshold_ticks and ask:
+                self.place_limit_order(symbol, size, _BID, int(ask))
+            elif mid > fundamental + self.threshold_ticks and bid:
+                self.place_limit_order(symbol, size, _ASK, int(bid))
+
+        def momentum_act(self) -> None:
+            symbol = self.symbol
+            bids = self.known_bids.get(symbol)
+            asks = self.known_asks.get(symbol)
+            bid = bids[0][0] if bids else None
+            ask = asks[0][0] if asks else None
+            if bid and ask:
+                mid = (int(bid) + int(ask)) / 2.0
+            elif bid:
+                mid = float(bid)
+            elif ask:
+                mid = float(ask)
+            else:
+                return
+            hist = self._mid_history
+            hist.append(mid)
+            if len(hist) > self.lookback + 1:
+                hist.pop(0)
+            if len(hist) <= self.lookback:
+                return
+            past = hist[0]
+            size = int(max(1, round(self.order_size_mean)))
+            if mid > past + self.threshold_ticks and ask:
+                self.place_limit_order(symbol, size, _BID, int(ask))
+            elif mid < past - self.threshold_ticks and bid:
+                self.place_limit_order(symbol, size, _ASK, int(bid))
+
+    TradingAgent.cancel_order = ta_cancel_order  # type: ignore[method-assign]
+    TradingAgent.cancel_all_orders = cancel_all_orders  # type: ignore[method-assign]
+    MarketMaker.act = mm_act  # type: ignore[method-assign]
+    ValueTrader.act = value_act  # type: ignore[method-assign]
+    MomentumTrader.act = momentum_act  # type: ignore[method-assign]
 
 
 def slim_exchange(exchange: Any) -> None:

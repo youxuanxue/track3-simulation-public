@@ -2,6 +2,8 @@
 """Compiled OrderBook + Kernel hot path. Semantics match ``hotpath.py``."""
 
 from copy import deepcopy as _real_deepcopy
+from libc.math cimport log, sqrt
+from libc.stdint cimport uint32_t
 from libc.stdlib cimport free, malloc, realloc
 from cpython.object cimport PyObject
 from cpython.ref cimport Py_DECREF, Py_INCREF, Py_XDECREF
@@ -19,6 +21,127 @@ KIND_CANCEL_REQ = 6
 KIND_SPREAD_REQ = 7
 KIND_SPREAD_RESP = 8
 KIND_MKT = 9
+
+# numpy.random.RandomState (legacy MT19937 / randomkit). Matches numpy 1.26
+# mtrand: next32 tempering, next_double = two 32-bit rk_double, polar
+# legacy_gauss with cache, masked randint via next32 when range fits 32-bit.
+cdef enum:
+    _MT_N = 624
+    _MT_M = 397
+    _MT_MATRIX_A = 0x9908b0df
+    _MT_UPPER = 0x80000000
+    _MT_LOWER = 0x7fffffff
+
+
+cdef class MT19937:
+    """Bit-exact stand-in for ``numpy.random.RandomState`` draws we use."""
+
+    cdef uint32_t key[624]
+    cdef int pos
+    cdef int has_gauss
+    cdef double gauss
+
+    def bind_numpy(self, rs):
+        st = rs.get_state()
+        if st[0] != "MT19937":
+            raise ValueError("expected RandomState MT19937")
+        arr = st[1]
+        cdef Py_ssize_t i
+        for i in range(624):
+            self.key[i] = <uint32_t>arr[i]
+        self.pos = int(st[2])
+        self.has_gauss = int(st[3])
+        self.gauss = float(st[4])
+        return self
+
+    cdef inline void _twist(self) noexcept nogil:
+        cdef int i
+        cdef uint32_t y
+        for i in range(_MT_N - _MT_M):
+            y = (self.key[i] & _MT_UPPER) | (self.key[i + 1] & _MT_LOWER)
+            self.key[i] = self.key[i + _MT_M] ^ (y >> 1) ^ ((-(y & 1)) & _MT_MATRIX_A)
+        for i in range(_MT_N - _MT_M, _MT_N - 1):
+            y = (self.key[i] & _MT_UPPER) | (self.key[i + 1] & _MT_LOWER)
+            self.key[i] = self.key[i + (_MT_M - _MT_N)] ^ (y >> 1) ^ (
+                (-(y & 1)) & _MT_MATRIX_A
+            )
+        y = (self.key[_MT_N - 1] & _MT_UPPER) | (self.key[0] & _MT_LOWER)
+        self.key[_MT_N - 1] = self.key[_MT_M - 1] ^ (y >> 1) ^ (
+            (-(y & 1)) & _MT_MATRIX_A
+        )
+        self.pos = 0
+
+    cdef inline uint32_t next32(self) noexcept nogil:
+        cdef uint32_t y
+        if self.pos == _MT_N:
+            self._twist()
+        y = self.key[self.pos]
+        self.pos += 1
+        y ^= (y >> 11)
+        y ^= (y << 7) & <uint32_t>0x9d2c5680
+        y ^= (y << 15) & <uint32_t>0xefc60000
+        y ^= (y >> 18)
+        return y
+
+    cdef inline double next_double(self) noexcept nogil:
+        cdef uint32_t a = self.next32() >> 5
+        cdef uint32_t b = self.next32() >> 6
+        return (a * 67108864.0 + b) / 9007199254740992.0
+
+    cdef inline double gauss_polar(self) noexcept nogil:
+        cdef double tmp, x1, x2, r2, f
+        if self.has_gauss:
+            tmp = self.gauss
+            self.has_gauss = 0
+            self.gauss = 0.0
+            return tmp
+        while True:
+            x1 = 2.0 * self.next_double() - 1.0
+            x2 = 2.0 * self.next_double() - 1.0
+            r2 = x1 * x1 + x2 * x2
+            if r2 > 0.0 and r2 < 1.0:
+                break
+        f = sqrt(-2.0 * log(r2) / r2)
+        self.gauss = f * x1
+        self.has_gauss = 1
+        return f * x2
+
+    cdef inline double normal(self, double loc, double scale) noexcept nogil:
+        return loc + scale * self.gauss_polar()
+
+    cdef inline long randint(self, long low, long high) noexcept nogil:
+        cdef uint32_t rng, mask, val
+        rng = <uint32_t>(high - low - 1)
+        if rng == 0:
+            return low
+        mask = rng
+        mask |= mask >> 1
+        mask |= mask >> 2
+        mask |= mask >> 4
+        mask |= mask >> 8
+        mask |= mask >> 16
+        while True:
+            val = self.next32() & mask
+            if val <= rng:
+                return low + <long>val
+
+    def py_normal(self, loc, scale):
+        return self.normal(loc, scale)
+
+    def py_randint(self, low, high):
+        return self.randint(low, high)
+
+
+cdef inline MT19937 _agent_mt(object agent):
+    cdef MT19937 mt
+    obj = getattr(agent, "_mt19937", None)
+    if obj is None:
+        mt = MT19937()
+        mt.bind_numpy(agent.random_state)
+        agent._mt19937 = mt
+        return mt
+    return <MT19937>obj
+
 
 cdef struct Event:
     long long deliver_at
@@ -1320,10 +1443,10 @@ def noise_act(self):
     asks = self.known_asks.get(symbol)
     bid = bids[0][0] if bids else None
     ask = asks[0][0] if asks else None
-    rs = self.random_state
-    size = int(max(1, round(rs.normal(self.order_size_mean, self.order_size_std))))
-    buy = rs.randint(0, 2)
-    offset = int(rs.randint(0, self.price_offset_ticks + 1))
+    cdef MT19937 mt = _agent_mt(self)
+    size = int(max(1, round(mt.normal(self.order_size_mean, self.order_size_std))))
+    buy = mt.randint(0, 2)
+    offset = int(mt.randint(0, self.price_offset_ticks + 1))
     if buy:
         anchor = int(ask) if ask else (int(bid) if bid else self.reference_price)
         place_limit_order(self, symbol, size, _BID, anchor + offset)
@@ -1552,3 +1675,21 @@ def apply_book_patches():
     PriceLevel.order_has_worse_price = pl_order_has_worse_price
     PriceLevel.order_has_equal_price = pl_order_has_equal_price
     OrderBook.cancel_order = cancel_order
+
+
+def mt19937_matches_numpy(seeds=20, draws=50):
+    """True iff C MT19937 lock-steps ``RandomState.normal`` / ``randint``."""
+    import numpy as np
+
+    for seed in range(seeds):
+        rs = np.random.RandomState(seed)
+        mt = MT19937()
+        mt.bind_numpy(rs)
+        for _ in range(draws):
+            if mt.normal(10.0, 2.0) != float(rs.normal(10.0, 2.0)):
+                return False
+            if mt.randint(0, 2) != int(rs.randint(0, 2)):
+                return False
+            if mt.randint(0, 6) != int(rs.randint(0, 6)):
+                return False
+    return True

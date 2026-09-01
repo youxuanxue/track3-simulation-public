@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.so
 *.egg-info/
 .eggs/
 build/
@@ -22,6 +23,9 @@ env/
 
 # Model weights / caches (staged into the scoring image, not committed)
 /model-cache/
+
+# Cython generated C (compiled from _hotpath.pyx in the image)
+baselines/fast_sim/_hotpath.c
 
 # Local scratch
 *.log

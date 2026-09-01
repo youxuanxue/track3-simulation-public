@@ -133,6 +133,14 @@ def apply_runtime_patches() -> None:
     ExchangeAgent.analyse_order_book = _noop  # type: ignore[method-assign]
     Kernel.write_summary_log = _noop  # type: ignore[method-assign]
 
+    # Compiled (Cython) OrderBook + Kernel hot path; Python fallback is bit-exact.
+    try:
+        from fast_sim._hotpath import apply_hotpath_patches
+    except ImportError:
+        from fast_sim.hotpath import apply_hotpath_patches
+
+    apply_hotpath_patches()
+
     _APPLIED = True
 
 

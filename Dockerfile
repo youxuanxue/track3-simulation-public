@@ -45,9 +45,20 @@ RUN apt-get update \
 
 COPY baselines/abides_fork /opt/abides_fork
 COPY baselines/fast_sim /opt/fast_sim
+COPY baselines/setup_fast_sim.py /opt/setup_fast_sim.py
 COPY simulate /usr/local/bin/simulate
 COPY simulate-batch /usr/local/bin/simulate-batch
-RUN chmod +x /usr/local/bin/simulate /usr/local/bin/simulate-batch
+RUN chmod +x /usr/local/bin/simulate /usr/local/bin/simulate-batch \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gcc g++ \
+    && test -f "$(python -c 'import sysconfig; print(sysconfig.get_path("include"))')/Python.h" \
+    && pip install --no-cache-dir cython==3.0.11 \
+    && cd /opt && python setup_fast_sim.py build_ext --inplace \
+    && pip uninstall -y cython \
+    && apt-get purge -y gcc g++ \
+    && apt-get autoremove -y \
+    && rm -rf /opt/setup_fast_sim.py /opt/build /opt/fast_sim/_hotpath.c \
+              /opt/fast_sim/*.egg-info /tmp/patches /var/lib/apt/lists/*
 
 WORKDIR /work
 # No ENTRYPOINT: the harness passes `simulate --config ... --out ...` as the command.

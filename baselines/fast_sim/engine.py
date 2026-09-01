@@ -57,6 +57,9 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     )
     kernel.messages = HeapPQueue()
     kernel.show_trace_messages = False
+    # Populated at deliver time so extract can skip the ledger×seq join+sort.
+    kernel._delivered = []
+    kernel._pending_ledger = {}
 
     end_state = kernel.run()
     # ExchangeAgent.kernel_terminating is a no-op; surface the ledger the
@@ -64,6 +67,8 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     if "message_ledger" not in end_state and hasattr(kernel, "_msg_ledger"):
         end_state["message_ledger"] = kernel._msg_ledger
         end_state["deliver_seq_by_key"] = kernel._deliver_seq_by_key
+    if hasattr(kernel, "_delivered"):
+        end_state["delivered_ledger"] = kernel._delivered
     if "agents" not in end_state:
         end_state["agents"] = agents
 

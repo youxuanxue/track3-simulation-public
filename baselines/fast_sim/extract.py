@@ -247,24 +247,15 @@ def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:
     return df.astype(_TRACE_DTYPES, copy=False)
 
 
-def extract_message_trace_from_state(end_state: dict[str, Any]) -> pd.DataFrame:
-    """Kernel ledger → ``message_trace.parquet``, without pandas object inference."""
-    ledger = end_state.get("message_ledger") or []
-    seqmap = end_state.get("deliver_seq_by_key") or {}
-    if not ledger:
-        return _empty_msg()
+def _nullable_int64(values: np.ndarray, mask: np.ndarray) -> pd.Series:
+    s = pd.array(values, dtype="Int64")
+    if mask.any():
+        s[mask] = pd.NA
+    return s
 
-    get = seqmap.get
-    pairs: list[tuple[int, dict]] = []
-    for r in ledger:
-        seq = get((int(r["message_id"]), int(r["dst_id"])))
-        if seq is not None:
-            pairs.append((seq, r))
-    if not pairs:
-        return _empty_msg()
-    pairs.sort(key=lambda sr: sr[0])
-    n = len(pairs)
 
+def _message_df_from_rows(rows: list[dict], *, seqs: list[int] | None = None) -> pd.DataFrame:
+    n = len(rows)
     seq = np.empty(n, dtype=np.int64)
     t_recv = np.empty(n, dtype=np.int64)
     t_send = np.empty(n, dtype=np.int64)
@@ -279,8 +270,8 @@ def extract_message_trace_from_state(end_state: dict[str, Any]) -> pd.DataFrame:
     parent = np.empty(n, dtype=np.int64)
     parent_na = np.zeros(n, dtype=np.bool_)
 
-    for i, (s, r) in enumerate(pairs):
-        seq[i] = s
+    for i, r in enumerate(rows):
+        seq[i] = r["seq"] if seqs is None else seqs[i]
         t_recv[i] = r["t_recv_ns"]
         ts = r["t_send_ns"]
         if ts is None:
@@ -303,24 +294,45 @@ def extract_message_trace_from_state(end_state: dict[str, Any]) -> pd.DataFrame:
         else:
             parent[i] = p
 
-    def _nullable(values: np.ndarray, mask: np.ndarray) -> pd.Series:
-        s = pd.array(values, dtype="Int64")
-        if mask.any():
-            s[mask] = pd.NA
-        return s
-
     df = pd.DataFrame(
         {
             "seq": seq,
             "t_recv_ns": t_recv,
-            "t_send_ns": _nullable(t_send, t_send_na),
+            "t_send_ns": _nullable_int64(t_send, t_send_na),
             "latency_ns": latency,
             "src_id": src,
             "dst_id": dst,
             "message_id": mid,
             "msg_type": msg_type,
-            "order_id": _nullable(oid, oid_na),
-            "causal_parent": _nullable(parent, parent_na),
+            "order_id": _nullable_int64(oid, oid_na),
+            "causal_parent": _nullable_int64(parent, parent_na),
         }
     )
     return df.astype(_MSG_DTYPES, copy=False)
+
+
+def extract_message_trace_from_state(end_state: dict[str, Any]) -> pd.DataFrame:
+    """Kernel ledger → ``message_trace.parquet``, without pandas object inference.
+
+    Phase 4 prefers ``delivered_ledger`` (already in delivery-seq order) so the
+    join against ``deliver_seq_by_key`` is skipped on the official path.
+    """
+    delivered = end_state.get("delivered_ledger")
+    if delivered:
+        return _message_df_from_rows(delivered)
+
+    ledger = end_state.get("message_ledger") or []
+    seqmap = end_state.get("deliver_seq_by_key") or {}
+    if not ledger:
+        return _empty_msg()
+
+    get = seqmap.get
+    pairs: list[tuple[int, dict]] = []
+    for r in ledger:
+        seq = get((int(r["message_id"]), int(r["dst_id"])))
+        if seq is not None:
+            pairs.append((seq, r))
+    if not pairs:
+        return _empty_msg()
+    pairs.sort(key=lambda sr: sr[0])
+    return _message_df_from_rows([r for _, r in pairs], seqs=[s for s, _ in pairs])

@@ -13,6 +13,7 @@ The compiled twin is ``fast_sim._hotpath`` (Cython). Both expose
 from __future__ import annotations
 
 from copy import deepcopy as _real_deepcopy
+from heapq import heappop, heappush
 from typing import Any, Optional
 
 _APPLIED = False
@@ -318,27 +319,29 @@ def send_message(
         noise = self.random_state.choice(len(self.latency_noise), p=self.latency_noise)
         deliver_at = sent_time + int(latency + noise)
 
-    self.messages.put((deliver_at, (sender_id, recipient_id, message)))
+    heappush(self.messages.queue, (deliver_at, (sender_id, recipient_id, message)))
 
     ledger_msgs = message.messages if type(message) is MessageBatch else (message,)
     latency_ns = deliver_at - sent_time
     parent = self._current_causal_uid
     ledger = self._msg_ledger
+    pending = getattr(self, "_pending_ledger", None)
     for lm in ledger_msgs:
         ord_ = getattr(lm, "order", None)
-        ledger.append(
-            {
-                "message_id": lm.message_id,
-                "src_id": sender_id,
-                "dst_id": recipient_id,
-                "t_send_ns": sent_time,
-                "t_recv_ns": deliver_at,
-                "latency_ns": latency_ns,
-                "msg_type": lm.type(),
-                "order_id": getattr(ord_, "order_id", None),
-                "causal_parent": parent,
-            }
-        )
+        entry = {
+            "message_id": lm.message_id,
+            "src_id": sender_id,
+            "dst_id": recipient_id,
+            "t_send_ns": sent_time,
+            "t_recv_ns": deliver_at,
+            "latency_ns": latency_ns,
+            "msg_type": type(lm).__name__,
+            "order_id": getattr(ord_, "order_id", None),
+            "causal_parent": parent,
+        }
+        ledger.append(entry)
+        if pending is not None:
+            pending[(lm.message_id, recipient_id)] = entry
 
 
 def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
@@ -349,16 +352,16 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
         exp_agent, action_list = agent_actions
         exp_agent.apply_actions(action_list)
 
-    messages = self.messages
+    q = self.messages.queue
     agent_times = self.agent_current_times
     agents = self.agents
     delays = self.agent_computation_delays
     stop_time = self.stop_time
+    pending = getattr(self, "_pending_ledger", None)
+    delivered = getattr(self, "_delivered", None)
 
-    while (not messages.empty()) and self.current_time and (
-        self.current_time <= stop_time
-    ):
-        self.current_time, event = messages.get()
+    while q and self.current_time and (self.current_time <= stop_time):
+        self.current_time, event = heappop(q)
         sender_id, recipient_id, message = event
         self.ttl_messages += 1
         self.current_agent_additional_delay = 0
@@ -366,27 +369,28 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
         if type(message) is WakeupMsg:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                messages.put((busy_until, (sender_id, recipient_id, message)))
+                heappush(q, (busy_until, (sender_id, recipient_id, message)))
                 continue
             agent_times[recipient_id] = self.current_time
             self._current_causal_uid = message.message_id
-            self._deliver_seq_by_key[(message.message_id, recipient_id)] = (
-                self._deliver_seq
-            )
-            self._deliver_seq += 1
-            self._msg_ledger.append(
-                {
-                    "message_id": message.message_id,
-                    "src_id": recipient_id,
-                    "dst_id": recipient_id,
-                    "t_send_ns": None,
-                    "t_recv_ns": self.current_time,
-                    "latency_ns": 0,
-                    "msg_type": "AGENT_WAKEUP",
-                    "order_id": None,
-                    "causal_parent": None,
-                }
-            )
+            seq = self._deliver_seq
+            self._deliver_seq_by_key[(message.message_id, recipient_id)] = seq
+            self._deliver_seq = seq + 1
+            entry = {
+                "message_id": message.message_id,
+                "src_id": recipient_id,
+                "dst_id": recipient_id,
+                "t_send_ns": None,
+                "t_recv_ns": self.current_time,
+                "latency_ns": 0,
+                "msg_type": "AGENT_WAKEUP",
+                "order_id": None,
+                "causal_parent": None,
+                "seq": seq,
+            }
+            self._msg_ledger.append(entry)
+            if delivered is not None:
+                delivered.append(entry)
             wakeup_result = agents[recipient_id].wakeup(self.current_time)
             agent_times[recipient_id] += (
                 delays[recipient_id] + self.current_agent_additional_delay
@@ -396,7 +400,7 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
         else:
             busy_until = agent_times[recipient_id]
             if busy_until > self.current_time:
-                messages.put((busy_until, (sender_id, recipient_id, message)))
+                heappush(q, (busy_until, (sender_id, recipient_id, message)))
                 continue
             agent_times[recipient_id] = self.current_time
             batch = message.messages if type(message) is MessageBatch else (message,)
@@ -405,10 +409,15 @@ def kernel_runner(self, agent_actions: Any = None) -> dict[str, Any]:
                     delays[recipient_id] + self.current_agent_additional_delay
                 )
                 self._current_causal_uid = sub.message_id
-                self._deliver_seq_by_key[(sub.message_id, recipient_id)] = (
-                    self._deliver_seq
-                )
+                seq = self._deliver_seq
+                self._deliver_seq_by_key[(sub.message_id, recipient_id)] = seq
                 self._deliver_seq += 1
+                if pending is not None:
+                    entry = pending.pop((sub.message_id, recipient_id), None)
+                    if entry is not None:
+                        entry["seq"] = seq
+                        if delivered is not None:
+                            delivered.append(entry)
                 agents[recipient_id].receive_message(
                     self.current_time, sender_id, sub
                 )

@@ -142,6 +142,7 @@ def apply_runtime_patches() -> None:
 
     apply_hotpath_patches()
     _apply_phase3_patches()
+    _apply_phase4_patches()
 
     _APPLIED = True
 
@@ -315,6 +316,196 @@ def _apply_phase3_patches() -> None:
 
     TradingAgent.create_limit_order = create_limit_order  # type: ignore[method-assign]
     TradingAgent.order_executed = order_executed  # type: ignore[method-assign]
+
+
+def _apply_phase4_patches() -> None:
+    """Cut the post-Phase-3 hot spots: agent ``isinstance``/ABC dispatch, heap
+    method-call tax (handled in the hot path), and PriceLevel one-order init.
+
+    Fall through to the original method for anything this track does not send
+    (post-close, MarketHours, modify/replace, data subscriptions).
+    """
+    from abides_fork.agents import ScheduledAgent
+    from abides_markets.agents.exchange_agent import ExchangeAgent
+    from abides_markets.agents.trading_agent import TradingAgent
+    from abides_markets.agents import exchange_agent as ea_mod
+    from abides_markets.messages.market import MarketHoursMsg, MarketHoursRequestMsg
+    from abides_markets.messages.order import CancelOrderMsg, LimitOrderMsg, MarketOrderMsg
+    from abides_markets.messages.orderbook import (
+        OrderAcceptedMsg,
+        OrderCancelledMsg,
+        OrderExecutedMsg,
+    )
+    from abides_markets.messages.query import QuerySpreadMsg, QuerySpreadResponseMsg
+    from abides_markets.price_level import PriceLevel
+
+    _clone = ea_mod.deepcopy
+    _orig_exch_recv = ExchangeAgent.receive_message
+    _orig_ta_recv = TradingAgent.receive_message
+
+    def exch_send_message(self, recipient_id: int, message: Any) -> None:
+        # ExchangeAgent.send_message always applied pipeline_delay to ack/fill/
+        # cancel and 0 otherwise. log_orders is off after slim_exchange.
+        t = type(message)
+        delay = (
+            self.pipeline_delay
+            if (
+                t is OrderAcceptedMsg
+                or t is OrderCancelledMsg
+                or t is OrderExecutedMsg
+            )
+            else 0
+        )
+        self.kernel.send_message(self.id, recipient_id, message, delay=delay)
+
+    def exch_receive_message(self, current_time, sender_id: int, message) -> None:
+        if current_time > self.mkt_close:
+            return _orig_exch_recv(self, current_time, sender_id, message)
+
+        self.current_time = current_time
+        self.kernel.agent_computation_delays[self.id] = self.computation_delay
+
+        t = type(message)
+        if t is LimitOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.handle_limit_order(_clone(order))
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        if t is QuerySpreadMsg:
+            book = self.order_books.get(message.symbol)
+            if book is not None:
+                depth = message.depth
+                self.send_message(
+                    sender_id,
+                    QuerySpreadResponseMsg(
+                        symbol=message.symbol,
+                        depth=depth,
+                        bids=book.get_l2_bid_data(depth),
+                        asks=book.get_l2_ask_data(depth),
+                        last_trade=book.last_trade,
+                        mkt_closed=False,
+                    ),
+                )
+            return
+        if t is CancelOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.cancel_order(_clone(order), message.tag, message.metadata)
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        if t is MarketHoursRequestMsg:
+            self.kernel.agent_computation_delays[self.id] = 0
+            self.send_message(
+                sender_id, MarketHoursMsg(self.mkt_open, self.mkt_close)
+            )
+            return
+        if t is MarketOrderMsg:
+            order = message.order
+            book = self.order_books.get(order.symbol)
+            if book is not None:
+                book.handle_market_order(_clone(order))
+                if self.data_subscriptions:
+                    self.publish_order_book_data()
+            return
+        return _orig_exch_recv(self, current_time, sender_id, message)
+
+    def ta_query_spread(self, symbol, price, bids, asks, book) -> None:
+        self.last_trade[symbol] = price
+        if self.mkt_closed:
+            self.daily_close_price[symbol] = price
+        self.known_bids[symbol] = bids
+        self.known_asks[symbol] = asks
+        self.book = book
+
+    def ta_receive_message(self, current_time, sender_id: int, message) -> None:
+        t = type(message)
+        if t is OrderExecutedMsg:
+            self.current_time = current_time
+            self.order_executed(message.order)
+            return
+        if t is OrderAcceptedMsg:
+            self.current_time = current_time
+            self.order_accepted(message.order)
+            return
+        if t is QuerySpreadResponseMsg:
+            self.current_time = current_time
+            if message.mkt_closed:
+                self.mkt_closed = True
+            self.query_spread(
+                message.symbol, message.last_trade, message.bids, message.asks, ""
+            )
+            return
+        if t is OrderCancelledMsg:
+            self.current_time = current_time
+            self.order_cancelled(message.order)
+            return
+        return _orig_ta_recv(self, current_time, sender_id, message)
+
+    def sched_receive_message(self, current_time, sender_id: int, message) -> None:
+        t = type(message)
+        if t is QuerySpreadResponseMsg:
+            self.current_time = current_time
+            if message.mkt_closed:
+                self.mkt_closed = True
+            self.query_spread(
+                message.symbol, message.last_trade, message.bids, message.asks, ""
+            )
+            if self.state == "AWAITING_SPREAD":
+                if not self.mkt_closed:
+                    self.act()
+                self.state = "AWAITING_WAKEUP"
+            return
+        if t is OrderExecutedMsg:
+            self.current_time = current_time
+            self.order_executed(message.order)
+            return
+        if t is OrderAcceptedMsg:
+            self.current_time = current_time
+            self.order_accepted(message.order)
+            return
+        if t is OrderCancelledMsg:
+            self.current_time = current_time
+            self.order_cancelled(message.order)
+            return
+        return _orig_ta_recv(self, current_time, sender_id, message)
+
+    def price_level_init(self, orders) -> None:
+        n = len(orders)
+        if n == 0:
+            raise ValueError(
+                "At least one LimitOrder must be given when initialising a PriceLevel."
+            )
+        order0, md0 = orders[0]
+        self.price = order0.limit_price
+        self.side = order0.side
+        if n == 1:
+            md = md0 or {}
+            if order0.is_hidden:
+                self.visible_orders = []
+                self.hidden_orders = [(order0, md)]
+                self._visible_qty = 0
+            else:
+                self.visible_orders = [(order0, md)]
+                self.hidden_orders = []
+                self._visible_qty = order0.quantity
+            return
+        self.visible_orders = []
+        self.hidden_orders = []
+        self._visible_qty = 0
+        for order, metadata in orders:
+            self.add_order(order, metadata)
+
+    ExchangeAgent.send_message = exch_send_message  # type: ignore[method-assign]
+    ExchangeAgent.receive_message = exch_receive_message  # type: ignore[method-assign]
+    TradingAgent.query_spread = ta_query_spread  # type: ignore[method-assign]
+    TradingAgent.receive_message = ta_receive_message  # type: ignore[method-assign]
+    ScheduledAgent.receive_message = sched_receive_message  # type: ignore[method-assign]
+    PriceLevel.__init__ = price_level_init  # type: ignore[method-assign]
 
 
 def slim_exchange(exchange: Any) -> None:

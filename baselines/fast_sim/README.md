@@ -170,6 +170,17 @@ those operations (same `_visible_qty` cache, same cheap-clone fill
 snapshot) and compiles `cancel_order`. Agent-facing objects stay
 Python `Message` / `LimitOrder`. No GPU. No agent rewrite.
 
-Family 1 14/14 + as06 + one MP + one RA must stay exact before this is
-called progress. Throughput vs step 1 (~139k / ~98k) is measured after
-that gate.
+**Family 1 14/14 exact.** as06, gb_mega, MP (`mp01`) and RA (`ra01`)
+exact.
+
+| Scenario | Step 1 | Step 2 best | vs Step 1 |
+|---|---|---|---|
+| `as06_throughput_fast` | 138,985 | **144,588** | **1.04×** |
+| `gb_mega_throughput` | 98,377 | **103,585** | **1.05×** |
+
+Repeats: as06 135.5k–144.6k (most runs sit in the step-1 band),
+gb_mega 98.9k–103.6k. Official B200 worker will differ.
+
+The PriceLevel Python bounce is gone. Leftover wall is still
+`Kernel.run` billed to Python, extract, and agent callbacks. Agents
+are **not** rewritten on this step.

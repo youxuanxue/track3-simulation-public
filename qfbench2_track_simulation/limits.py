@@ -9,8 +9,17 @@ Track 3 outputs, and nothing else:
 
 | Unit shape | Allowed relative paths |
 |---|---|
-| single-market | ``trace.parquet``, ``events.json``, ``message_trace.parquet`` |
-| batch | ``batch_events.json`` plus, per declared sub, ``<sub>/{trace,message_trace}.parquet`` and ``<sub>/events.json`` |
+| single-market | ``trace.parquet``, ``events.json``, ``message_trace.parquet``, ``profile.json`` |
+| batch | ``batch_events.json`` plus, per declared sub, ``<sub>/{trace,message_trace}.parquet``, ``<sub>/events.json`` and ``<sub>/profile.json`` |
+
+``profile.json`` is the OPTIONAL Best Systems Diagnosis sidecar. ``docs/PROFILING.md`` tells a
+participant to drop it next to ``trace.parquet`` in ``/output`` and ``throughput/simprofile.py``
+calls it "a submission output sidecar"; the cross-submission assembler that consumes it lives
+outside this repository (``throughput/awards.py`` scores the resulting diagnosis, it does not read
+the file). Until 2026-09-02 the name was in none of these lists, so a submission that followed the
+guide had its WHOLE output tree refused (``path_not_allowed``) and the award had no compliant path
+(track3-simulation-private#28, found by NVIDIA). It is admitted by name and bounded like every
+other member; the ranked scorer never reads it, so admitting it widens no ranking surface.
 
 Maximum depth 2. The sub list comes from the ORGANIZER's ``batch.json``, never from a directory
 listing of what the submission produced — otherwise a submission could widen its own allowlist by
@@ -32,19 +41,29 @@ from typing import Sequence
 __all__ = [
     "BATCH_ROOT_FILES",
     "MAX_DEPTH",
+    "PROFILE_SIDECAR",
     "SINGLE_UNIT_FILES",
     "SUB_FILES",
     "allowed_paths_for",
     "max_rows_for",
 ]
 
+#: The optional profiling sidecar the Best Systems Diagnosis award reads (see the module note).
+PROFILE_SIDECAR = "profile.json"
+
 SINGLE_UNIT_FILES: tuple[str, ...] = (
     "trace.parquet",
     "events.json",
     "message_trace.parquet",
+    PROFILE_SIDECAR,
 )
 BATCH_ROOT_FILES: tuple[str, ...] = ("batch_events.json",)
-SUB_FILES: tuple[str, ...] = ("trace.parquet", "events.json", "message_trace.parquet")
+SUB_FILES: tuple[str, ...] = (
+    "trace.parquet",
+    "events.json",
+    "message_trace.parquet",
+    PROFILE_SIDECAR,
+)
 MAX_DEPTH = 2
 
 

@@ -57,7 +57,12 @@ SINGLE_UNIT_FILES: tuple[str, ...] = (
     PROFILE_SIDECAR,
 )
 BATCH_ROOT_FILES: tuple[str, ...] = ("batch_events.json",)
-SUB_FILES: tuple[str, ...] = ("trace.parquet", "events.json", "message_trace.parquet", PROFILE_SIDECAR)
+SUB_FILES: tuple[str, ...] = (
+    "trace.parquet",
+    "events.json",
+    "message_trace.parquet",
+    PROFILE_SIDECAR,
+)
 MAX_DEPTH = 2
 
 

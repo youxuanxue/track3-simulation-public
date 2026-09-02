@@ -265,9 +265,8 @@ def test_a_clean_run_is_retained(tmp_path: Path) -> None:
 
     raw = tmp_path / "raw"
     raw.mkdir()
-    (raw / "events.json").write_text("{}")
-    (raw / "trace.parquet").write_bytes(b"PAR1")
-    (raw / "message_trace.parquet").write_bytes(b"PAR1")
+    for name in SINGLE_UNIT_FILES:          # every allowed output, the sidecar included
+        (raw / name).write_bytes(b"{}" if name.endswith(".json") else b"PAR1")
     unit = tmp_path / "unit"
     unit.mkdir()
     kept = tmp_path / "kept"

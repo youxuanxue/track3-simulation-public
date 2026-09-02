@@ -159,8 +159,31 @@ def test_the_reference_sentinel_never_reaches_a_sanitized_tree() -> None:
 
 
 # --------------------------------------------------------------------------- Track 3 allowlist
-def test_the_track_allowlist_is_exactly_the_three_outputs(tmp_path: Path) -> None:
+def test_the_track_allowlist_is_exactly_the_three_outputs_and_the_profile_sidecar(tmp_path: Path) -> None:
     assert allowed_paths_for(tmp_path / "no-batch-json-here") == SINGLE_UNIT_FILES
+    assert set(SINGLE_UNIT_FILES) == {"trace.parquet", "events.json", "message_trace.parquet",
+                                      "profile.json"}
+
+
+def test_the_profiling_sidecar_survives_sanitation_in_both_unit_shapes(tmp_path: Path) -> None:
+    """docs/PROFILING.md says "drop profile.json next to your trace.parquet in /output"; before
+    2026-09-02 the allowlist did not name it and the sanitizer dropped it silently, so the Best
+    Systems Diagnosis award had no compliant path (track3-simulation-private#28)."""
+    import json
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "trace.parquet").write_bytes(b"PAR1")
+    (raw / "profile.json").write_text('{"gpu_util": 0.5}')
+    clean = tmp_path / "exclusive" / "clean"
+    clean.parent.mkdir(parents=True)
+    _sanitize(raw, clean, SINGLE_UNIT_FILES)
+    assert sorted(p.name for p in clean.iterdir()) == ["profile.json", "trace.parquet"]
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    (unit / "batch.json").write_text(json.dumps({"n": 1, "subs": [{"sub": "sub_00"}]}))
+    allowed = allowed_paths_for(unit)
+    assert "sub_00/profile.json" in allowed
+    assert "profile.json" not in allowed, "a batch root carries no sidecar; each sub does"
 
 
 def test_a_batch_allowlist_comes_from_the_organizer_declaration(tmp_path: Path) -> None:

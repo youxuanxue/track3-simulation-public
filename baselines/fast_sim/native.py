@@ -216,12 +216,26 @@ def as_pandas(obj: Any) -> Any:
 
 
 def write_parquet(obj: Any, path: Any) -> None:
-    """Write a pyarrow Table (or pandas DataFrame) without an extra frame copy."""
+    """Write a pyarrow Table (or pandas DataFrame).
+
+    Event traces stay a raw Arrow write. Message ledgers have nullable
+    ``t_send_ns`` / ``order_id`` / ``causal_parent``: ``pq.write_table``
+    emits no pandas metadata, so the official scorer's ``pd.read_parquet``
+    (no ``dtype_backend``) promotes those columns to float64 and rounds
+    19-digit ns timestamps. That breaks ``t_recv - t_send == latency_ns``
+    and causal order on every batch sub even though the in-memory ledger
+    is self-consistent. Write those columns as pandas ``Int64`` so the
+    parquet pandas metadata restores them as integers.
+    """
     from pathlib import Path
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     schema = getattr(obj, "schema", None)
+    names = getattr(schema, "names", None) or []
+    if "t_send_ns" in names:
+        as_pandas(obj).to_parquet(path, compression="snappy", index=False)
+        return
     if schema is not None and hasattr(obj, "to_batches"):
         import pyarrow.parquet as pq
 

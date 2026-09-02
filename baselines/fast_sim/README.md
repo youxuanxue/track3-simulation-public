@@ -27,7 +27,10 @@ hybrid stays as `FAST_SIM_NATIVE=0`. Step 12 moves latency
 `uniform` onto C `MT19937` and writes parquet from pyarrow
 Tables. Step 13 ports ValueTrader `observe_price` (OU +
 megashock + scheduled jump) onto C after a lock-step proof
-against the Python oracle. No GPU.
+against the Python oracle. A follow-up writes message
+ledgers through pandas ``Int64`` so official ``pd.read_parquet``
+does not promote ``t_send_ns`` to float64 (batch isolation).
+No GPU.
 
 GPU is unused. CUDA / `sm_100` is not compiled; the default path is CPU.
 
@@ -498,8 +501,24 @@ worker will differ. Both units &lt;10% vs Step 12 (as06/gb_mega
 have `jump_intensity=0`; C observe still drops the Python call).
 Not 10×.
 
+## Batch message ledger (this change)
+
+`simulate-batch` already wrote a self-consistent in-memory ledger
+(`t_recv - t_send == latency`, causal parent delivered before
+child send). Native `result()` is a pyarrow Table; Step 12's
+`pq.write_table` has no pandas metadata, so the official
+`pd.read_parquet` (no `dtype_backend`) promotes nullable
+`t_send_ns` to float64 and rounds ~1.6e18 ns times. Batch
+`score_isolation` always runs `check_message_semantics` even
+when the card says `requires_message_ledger = false`. Event
+`trace.parquet` is unchanged (still raw Arrow). Message
+ledgers go through pandas `Int64` so the parquet pandas
+metadata restores integers. Hybrid already wrote DataFrames.
+No GPU. Family 1 traces unchanged.
+
 ## Remaining 10× path
 
 ~532k / ~481k → ~1.4M / ~1.0M is still ~2.6–2.9×. Leftover Python
-is pyarrow table build at the end of the run. After-close stays
-Step 5. GPU only for independent `simulate-batch`.
+is pyarrow table build at the end of the run (event traces still
+skip the DataFrame). After-close stays Step 5. GPU only for
+independent `simulate-batch`.

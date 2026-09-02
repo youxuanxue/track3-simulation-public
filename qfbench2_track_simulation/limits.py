@@ -13,12 +13,13 @@ Track 3 outputs, and nothing else:
 | batch | ``batch_events.json`` plus, per declared sub, ``<sub>/{trace,message_trace}.parquet``, ``<sub>/events.json`` and ``<sub>/profile.json`` |
 
 ``profile.json`` is the OPTIONAL Best Systems Diagnosis sidecar. ``docs/PROFILING.md`` tells a
-participant to drop it next to ``trace.parquet`` in ``/output``, ``throughput/simprofile.py``
-calls it "a submission output sidecar", and ``throughput/awards.py`` reads it from there -- but
-until 2026-09-02 it was in none of these lists, so the sanitizer silently dropped it and the award
-had no compliant path (track3-simulation-private#28, found by NVIDIA). It is admitted by name and
-bounded like every other member; it is never read by the ranked scorer, so admitting it widens no
-ranking surface.
+participant to drop it next to ``trace.parquet`` in ``/output`` and ``throughput/simprofile.py``
+calls it "a submission output sidecar"; the cross-submission assembler that consumes it lives
+outside this repository (``throughput/awards.py`` scores the resulting diagnosis, it does not read
+the file). Until 2026-09-02 the name was in none of these lists, so a submission that followed the
+guide had its WHOLE output tree refused (``path_not_allowed``) and the award had no compliant path
+(track3-simulation-private#28, found by NVIDIA). It is admitted by name and bounded like every
+other member; the ranked scorer never reads it, so admitting it widens no ranking surface.
 
 Maximum depth 2. The sub list comes from the ORGANIZER's ``batch.json``, never from a directory
 listing of what the submission produced — otherwise a submission could widen its own allowlist by

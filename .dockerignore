@@ -1,0 +1,17 @@
+.git
+units
+regression_suite/reference_traces
+run_outputs
+__pycache__
+*.pyc
+.venv
+abides-jpmc-public
+*.md
+docs
+tests
+scripts
+throughput
+qfbench2_track_simulation
+templates
+canary_registry.json
+.github

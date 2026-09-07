@@ -33,18 +33,21 @@ is free (see the asymmetry below). Do not read any of them as a target.
 
 | Quantity | Value | Provenance |
 |---|---|---|
-| Unmodified ABIDES baseline | ~65,000 events/sec | NOT measured on the evaluation fleet; `baselines/README.md` §3 |
+| Unmodified ABIDES baseline | ~65,000 events/sec | No measurement recorded anywhere in this repository; WITHDRAWN as a target in `baselines/README.md` §1/§3. Retained here only as the historical input the ceiling was derived from |
+| Unmodified ABIDES baseline, measured | 13,793 events/sec geomean | The 65 shipped ``units/*/events.json``; hardware not recorded, so not a fleet figure either. This is what participants are now told |
 | Internal vectorized reference | ~400,000 events/sec | NOT measured on the evaluation fleet; same section |
 | Competitive band, per market | 150,000-600,000 events/sec | Never measured, and WITHDRAWN from `baselines/README.md` §3 as fabricated. Retained here only as the historical input the ceiling was derived from |
 | Physical per-market ceiling | 1e7 events/sec | :data:`MAX_PER_MARKET_EVENTS_PER_SEC`, below — a chosen bound, not a measurement |
 | Widest batch unit | roster-dependent | ``<unit>/batch.json`` on the organizer side |
 
-**The repository's own shipped data contradicts the 65,000 figure.** The 65 public
+**65,000 is WITHDRAWN as a target, and the repository's own shipped data is why.** The 65 public
 ``units/*/events.json``, all written by the same pinned baseline, record a geometric mean of
-**13,793 events/sec** (range 3,471-18,046) — about **4.7x below** 65,000. The hardware behind those
-runs is not recorded either, and their ``wall_clock_sec`` covers the simulation loop rather than the
-whole container, so they do not replace a fleet measurement; they do show that 65,000 is the figure
-least likely to be right. The ranking floor is UNCHANGED by this note, and neither number is read
+**13,793 events/sec** (range 3,471-18,046, median 14,302) — about **4.7x below** 65,000. The
+hardware behind those runs is not recorded either, and their ``wall_clock_sec`` covers the
+simulation loop rather than the whole container, so they do not replace a fleet measurement; no
+fleet-measured baseline exists yet and one is coming. What they do establish is that 65,000 is the
+figure least likely to be right, so `baselines/README.md` now publishes 13,793 with its provenance
+and gives 65,000 no role. The ranking floor is UNCHANGED by this note, and neither number is read
 by the code here: see :data:`ABIDES_BASELINE_EVENTS_PER_SEC` and `baselines/README.md` §3 for what
 the floor is actually compared against.
 
@@ -105,11 +108,17 @@ PARTICIPANT_FAILURE_SCORE = 0.0
 #: DOCUMENTATION ONLY: nothing in this package or in the scorer reads them, so their values do not
 #: move any score. Only :data:`MAX_PER_MARKET_EVENTS_PER_SEC` below feeds the clip ceiling.
 
-#: The ranking floor's nominal figure. The repository's own 65 shipped ``units/*/events.json``,
-#: written by this same pinned baseline, give a geometric mean of 13,793 events/sec (range
-#: 3,471-18,046) — about 4.7x lower. The floor itself is UNCHANGED and is not this constant:
-#: per ``baselines/README.md`` §3 it compares the median of your throughput units against the
-#: median recorded in those same units' reference ``events.json``.
+#: WITHDRAWN AS A TARGET, and it was never the ranking floor. It was published as the floor's
+#: nominal figure until ``baselines/README.md`` withdrew it; the repository's own 65 shipped
+#: ``units/*/events.json``, written by this same pinned baseline, give a geometric mean of
+#: 13,793 events/sec (range 3,471-18,046, median 14,302) — about 4.7x lower, and that measured
+#: figure is what participants are now told. The floor itself is UNCHANGED and is not this
+#: constant: per ``baselines/README.md`` §3 it compares the median of your throughput units
+#: against the median recorded in those same units' reference ``events.json``.
+#:
+#: The value is kept, at its original number, for exactly one reason: the ceiling derivation above
+#: and ``tests/test_domain_ceiling.py`` are pinned to it as a HISTORICAL INPUT. Nothing reads it to
+#: score, rank or gate anything. Do not publish it as a figure to beat.
 ABIDES_BASELINE_EVENTS_PER_SEC = 65_000.0
 
 #: Internal reference point; gates nothing. Not measured on the evaluation fleet.

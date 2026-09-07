@@ -65,6 +65,17 @@ The 65 public scenarios are distributed in this repo with reference traces (the 
 
 Only `gb_base_30agent_30s` is close on event count; the rest are understated by up to 17x, because each unit deliberately scales a different throughput axis away from that base. The rate is overstated for all six. The `description` strings are inert metadata — nothing reads them, and they are byte-pinned by each unit's `manifest.json` — so they are left unchanged here rather than edited, and this table is the number to trust. Neither figure is a target: the hardware behind the shipped runs is not recorded, and `wall_clock_sec` there covers the simulation loop rather than the whole container.
 
+Why the files are not edited: each `gb_*.json` is byte-identical to its unit's `scenario.json`, and that byte string is sha256-pinned in the unit's `manifest.json`. Editing the prose would break the manifest checksum `.github/validate_units.py` enforces, for no gain — the strings gate nothing. Verify both claims from a clone:
+
+```bash
+diff scenarios/gb_mega_throughput.json ../units/t3-gb-mega-throughput/scenario.json && echo identical
+shasum -a 256 ../units/t3-gb-mega-throughput/scenario.json
+grep -c "$(shasum -a 256 ../units/t3-gb-mega-throughput/scenario.json | cut -d' ' -f1)" \
+     ../units/t3-gb-mega-throughput/manifest.json
+```
+
+The same applies to the wider throughput picture: the ~65,000 events/sec ABIDES baseline this repository used to publish as the figure to beat is **withdrawn**, no fleet-measured baseline exists yet, and the shipped references measure **13,793 events/sec geomean** on unspecified hardware. See `../baselines/README.md` §1.
+
 ### Example public scenarios
 
 All public scenarios are real files in `scenarios/` (`index.json` plus the named JSON configs); their ids are fixed and must not be renamed or renumbered. Three representative examples:

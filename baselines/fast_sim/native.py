@@ -102,9 +102,14 @@ def _oracle_spec(oracle: Any) -> dict[str, Any] | None:
 
     import numpy as np
 
-    sym = oracle.symbols["ABM"]
-    pt, pv = oracle.r["ABM"]
-    ms = oracle.megashocks["ABM"][-1]
+    symbols = getattr(oracle, "symbols", {})
+    if not symbols:
+        return None
+    sym_key = "ABM" if "ABM" in symbols else next(iter(symbols.keys()))
+    sym = symbols[sym_key]
+    pt, pv = oracle.r.get(sym_key, (0, 0))
+    ms_list = oracle.megashocks.get(sym_key)
+    ms = ms_list[-1] if ms_list else {"MegashockTime": 0.0, "MegashockValue": 0.0}
     jumps = []
     for jump in sym.get("scheduled_jumps") or []:
         jumps.append(
@@ -144,7 +149,10 @@ def snapshot_native(config: dict[str, Any]) -> dict[str, Any]:
     )
     mkt_open = int(exchange.mkt_open)
     mkt_close = int(exchange.mkt_close)
-    last_trade = int(oracle.get_daily_open_price("ABM", mkt_open)) if oracle is not None else 100000
+    sym_key = "ABM"
+    if oracle is not None and getattr(oracle, "symbols", None):
+        sym_key = "ABM" if "ABM" in oracle.symbols else next(iter(oracle.symbols.keys()))
+    last_trade = int(oracle.get_daily_open_price(sym_key, mkt_open)) if oracle is not None else 100000
     roster = []
     for agent in agents:
         k = _kind(agent)

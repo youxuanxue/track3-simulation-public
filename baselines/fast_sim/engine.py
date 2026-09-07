@@ -52,7 +52,14 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     from fast_sim.native import run_native, should_use_native
 
     if should_use_native(agents):
-        return run_native(config)
+        try:
+            return run_native(config)
+        except Exception as exc:
+            import logging
+            logging.getLogger("fast_sim").warning(
+                "Native C kernel failed on scenario (%s); safely falling back to hybrid path",
+                exc,
+            )
 
     # abides_core.abides.run ignores config["random_state_kernel"] and constructs
     # Kernel(random_state=RandomState(seed=0)). Match that exactly so any latent

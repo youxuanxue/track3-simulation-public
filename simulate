@@ -1,0 +1,4 @@
+#!/bin/sh
+# Track 3 submission CLI shim. The evaluation harness invokes the image as
+#   simulate --config /input/scenario.json --out /output/trace.parquet
+exec python -m fast_sim.simulate "$@"

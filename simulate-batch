@@ -1,0 +1,4 @@
+#!/bin/sh
+# Track 3 batched-submission CLI shim.
+#   simulate-batch --batch-dir /input/scenarios --out-dir /output
+exec python -m fast_sim.simulate_batch "$@"

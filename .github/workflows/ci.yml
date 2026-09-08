@@ -105,6 +105,8 @@ jobs:
           pip install "qfbench2-common @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${{ env.QFBENCH2_COMMON_REF }}#subdirectory=common"
       - name: Ruff lint
         run: ruff check qfbench2_track_simulation throughput regression_suite baselines/abides_fork
+      - name: Participant submission preparation
+        run: PYTHON=python bash scripts/preflight.sh
       - name: Ruff format check
         run: ruff format --check qfbench2_track_simulation throughput regression_suite baselines/abides_fork
       - name: Mypy (strict)

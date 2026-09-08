@@ -1,5 +1,8 @@
 # Track 3 — Semantic-Preserving Market Simulation
 
+Participant fork: [submission readiness, local verification and packaging](docs/SUBMISSION-READINESS.md).
+The official starter-kit documentation continues below.
+
 ## Executive summary (read this first)
 
 Track 3 asks one question: **can you build a faster market simulator that still behaves

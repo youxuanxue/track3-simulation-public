@@ -1,0 +1,46 @@
+{
+  "image": "ghcr.io/youxuanxue/track3-simulation-public@sha256:b7892677fb8c3446a3814ae24a141f2696c006130b6323807a4f34dc48e68d40",
+  "checked_at": "2026-09-08T05:38:45.256888+00:00",
+  "profile": "developer",
+  "rankable": false,
+  "status": "passed",
+  "host": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "toolkit_version": "2.3.1",
+  "scorer_commit": "78f4f7bbfe8feb35b1c56714061b3f1b2a3cf6c4",
+  "regression": {
+    "total_scenarios": 65,
+    "passed": 65,
+    "failed": 0,
+    "errored": 0
+  },
+  "batch_units": [
+    "t3-gbatch-dense-3",
+    "t3-gbatch-hetero-mix",
+    "t3-gbatch-homog-4",
+    "t3-gbatch-homog-8",
+    "t3-gbatch-many-6",
+    "t3-gbatch-varsize"
+  ],
+  "repeats": {
+    "t3-as06-throughput-fast": {
+      "runs": 3,
+      "parquet_sha256": {
+        "message_trace.parquet": "01807f19fe43046529f61fcd795fd0d0ed4fc9c40cbb7319b0a3270850a86ad8",
+        "trace.parquet": "f7cc9d1131089dc5685f4df239ad9fc46e6c9ffea7a9a2562e7e14eb1e9d7006"
+      }
+    },
+    "t3-gbatch-dense-3": {
+      "runs": 3,
+      "parquet_sha256": {
+        "sub_00/message_trace.parquet": "35f0726636c9925c74d48f06166fa19b75ab942b30430e7d84f06a67de550402",
+        "sub_00/trace.parquet": "33e00283b6f3defd4724427d7dd3475ae9206e363a8d7000b2745d5006044cb9",
+        "sub_01/message_trace.parquet": "a2713d665385d6812af69ef58626de4ad73f65d6ab8b9b4cda85c2ddaed5ed1e",
+        "sub_01/trace.parquet": "f193d8bf10fd6fe3c05376405d19cfab41d9c764098f55024be534b5d2245c4e",
+        "sub_02/message_trace.parquet": "2101a8e3df49367f748059167419d7dda9c9cae9a2e8aba1b08f534e0a5f6d46",
+        "sub_02/trace.parquet": "4d3ba251b636e71feb66cc70ba3e441ec973a73854f42f2ed1e8f5c0e8603515"
+      }
+    }
+  },
+  "exemplar": "not verified: no public reference traces; full-size run remains pending",
+  "anonymous_registry_access": true
+}

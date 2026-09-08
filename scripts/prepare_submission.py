@@ -15,7 +15,7 @@ import platform
 import subprocess
 import sys
 from datetime import datetime, timezone
-from importlib.metadata import version
+from importlib.metadata import distribution
 from importlib.resources import files
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -51,8 +51,15 @@ def descriptor(candidate: dict) -> dict:
     )
     body = json.loads(fixture.read_text())
     body.update(
-        schema_version="1.1.0",
-        models=[],
+        models=[
+            {
+                "name": "none-deterministic-simulator",
+                "version": candidate["image"]["digest"],
+                "training_cutoff": "not-applicable",
+                "access": "local",
+                "revision": candidate["image"]["digest"],
+            }
+        ],
         image=candidate["image"],
         license=candidate["license"],
         team_id=candidate["confirmed_c5_team_id"] or "unconfirmed-do-not-submit",
@@ -299,7 +306,10 @@ def verify(candidate: dict, output: Path) -> dict:
         "rankable": False,
         "status": "passed",
         "host": platform.platform(),
-        "toolkit_version": version("qfbench2-common"),
+        "toolkit_version": distribution("qfbench2-common").version,
+        "toolkit_source": json.loads(
+            distribution("qfbench2-common").read_text("direct_url.json") or "null"
+        ),
         "scorer_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),

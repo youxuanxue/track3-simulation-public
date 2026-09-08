@@ -86,7 +86,10 @@ def test_package_roundtrip_and_reproducible_bytes(ready, tmp_path):
         )
     assert parsed.team_id == ready["confirmed_c5_team_id"]
     assert parsed.track == "simulation" and parsed.phase == "dev"
-    assert parsed.category == "simulator" and not parsed.models
+    assert parsed.category == "simulator"
+    assert len(parsed.models) == 1
+    assert parsed.models[0].name == "none-deterministic-simulator"
+    assert parsed.models[0].revision == ready["image"]["digest"]
 
 
 @pytest.mark.parametrize(

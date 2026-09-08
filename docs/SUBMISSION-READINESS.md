@@ -11,7 +11,8 @@ the exact image that was verified.
   reference, submission license, and confirmed registration fields.
 - [Local verification](../submission/validation.json) records the public regression,
   batch isolation, and repeated single/batch parquet checks. It is a developer
-  result (`rankable=false`), not an official score or a speedup claim.
+  result (`rankable=false`), not an official score or a speedup claim. The toolkit
+  installation source and resolved commit are recorded alongside its version.
 - [Implementation](../baselines/fast_sim/) uses a native C/Cython CPU path with the
   pinned ABIDES adapter and hybrid fallback. No model endpoint or GPU setup is needed.
 
@@ -83,8 +84,10 @@ that the organizer assigned an ID, so check the cited source before filling them
 ```
 
 The package contains only a sealed C5 `submission.json`, derived from the installed
-toolkit fixture. It refuses incomplete registration, incomplete local evidence,
-another image digest, or an existing destination ZIP. Local evidence is a
+toolkit fixture. The pinned v2.3.1 contract requires a nonempty model disclosure;
+its deterministic-simulator placeholder is bound to the candidate image digest,
+with training marked not applicable. It refuses incomplete registration,
+incomplete local evidence, another image digest, or an existing destination ZIP. Local evidence is a
 participant record, not signed organizer telemetry. Nothing here uploads or uses
 a submission quota automatically.
 

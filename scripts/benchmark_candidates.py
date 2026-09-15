@@ -246,6 +246,16 @@ def gate_output(unit: Path, output: Path) -> dict:
     }
 
 
+def require_native_host(measured_host: dict) -> None:
+    # Card resources are container maxima. Linux MemTotal excludes kernel-reserved
+    # RAM, so comparing it to a 16 GiB container limit rejects ordinary 16 GiB hosts.
+    # The actual complete run, enforced limits and peak telemetry establish G2.
+    if not measured_host["native"] or measured_host["docker_cpus"] < CAPS["cpus"]:
+        raise ValueError(
+            "native linux/amd64 with four CPUs is required; diagnostics cannot qualify"
+        )
+
+
 def run_plan(
     plan_path: Path,
     output: Path,
@@ -258,13 +268,8 @@ def run_plan(
     validate_plan(plan, current=True)
     if host() != plan["host"]:
         raise ValueError("host drift")
-    if not diagnostic and (
-        not plan["host"]["native"]
-        or plan["host"]["docker_memory"] < CAPS["memory_bytes"]
-    ):
-        raise ValueError(
-            "native linux/amd64 with at least 16 GiB is required; diagnostic runs cannot qualify"
-        )
+    if not diagnostic:
+        require_native_host(plan["host"])
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     save(output / "plan.json", plan)

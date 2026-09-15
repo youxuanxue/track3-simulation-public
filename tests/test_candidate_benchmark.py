@@ -377,3 +377,13 @@ def test_problem_count_survives_rounds_but_resets_after_fix(tmp_path):
     assert bench.record_problem(tmp_path, "unit", "semantic") == 3
     assert bench.record_problem(tmp_path, "unit", None) == 0
     assert bench.record_problem(tmp_path, "unit", "semantic") == 1
+
+
+def test_kernel_reserved_host_memory_is_not_a_container_limit_failure():
+    bench.require_native_host(
+        {"native": True, "docker_cpus": 4, "docker_memory": 16766418944}
+    )
+    with pytest.raises(ValueError, match="native linux"):
+        bench.require_native_host(
+            {"native": False, "docker_cpus": 4, "docker_memory": 32 * 1024**3}
+        )

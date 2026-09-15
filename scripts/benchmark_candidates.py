@@ -154,6 +154,29 @@ def host() -> dict:
     }
 
 
+def select_screen_units(units: list[dict]) -> list[str]:
+    """Pin short/long horizons per family, every batch and the full exemplar."""
+    selected = {u["unit"] for u in units if u["batch"] or u["unit"] == EXEMPLAR}
+    for family in sorted({u["family"] for u in units}):
+        singles = [u for u in units if u["family"] == family and not u["batch"]]
+        if not singles:
+            continue
+
+        def horizon(unit: dict) -> tuple[int, str]:
+            scenario = ROOT / "units" / unit["unit"] / "scenario.json"
+            return int(json.loads(scenario.read_text())["horizon_ns"]), unit["unit"]
+
+        ordered = sorted(singles, key=horizon)
+        selected.update((ordered[0]["unit"], ordered[-1]["unit"]))
+    return [u["unit"] for u in units if u["unit"] in selected]
+
+
+def execution_roster(plan: dict) -> list[dict]:
+    if plan["purpose"] != "screen":
+        return plan["roster"]
+    return [u for u in plan["roster"] if u["unit"] in plan["screen_units"]]
+
+
 def freeze(args: argparse.Namespace) -> dict:
     if args.purpose == "confirmation" and not args.baseline:
         raise ValueError("confirmation requires a fixed B0/current-stable image")
@@ -179,7 +202,7 @@ def freeze(args: argparse.Namespace) -> dict:
         if args.baseline
         else {"A": args.image},
         "warmups": 1,
-        "repeats": REPEATS,
+        "repeats": 1 if args.purpose == "screen" else REPEATS,
         "bootstrap_samples": BOOTSTRAPS,
         "analysis_seed": ANALYSIS_SEED,
         "resampling": "complete-paired-groups-percentile",
@@ -192,6 +215,8 @@ def freeze(args: argparse.Namespace) -> dict:
         ],
         "holdout": index(args.holdout) if args.holdout else None,
     }
+    if args.purpose == "screen":
+        plan["screen_units"] = select_screen_units(plan["roster"])
     plan["plan_sha256"] = digest(plan)
     save(args.out, plan)
     return plan
@@ -205,8 +230,23 @@ def validate_plan(plan: dict, *, current: bool = False) -> None:
         raise ValueError("frozen plan changed")
     if plan["rankable"] is not False or plan["profile"] != "developer":
         raise ValueError("local plans must be non-rankable")
-    if plan["repeats"] != REPEATS or plan["warmups"] != 1 or plan["caps"] != CAPS:
+    repeats = 1 if plan["purpose"] == "screen" else REPEATS
+    if plan["repeats"] != repeats or plan["warmups"] != 1 or plan["caps"] != CAPS:
         raise ValueError("unexpected measurement protocol")
+    if plan["purpose"] == "screen":
+        selected = plan.get("screen_units", [])
+        subset = execution_roster(plan)
+        mandatory = {
+            u["unit"] for u in plan["roster"] if u["batch"] or u["unit"] == EXEMPLAR
+        }
+        if (
+            not selected
+            or len(set(selected)) != len(selected)
+            or len(subset) != len(selected)
+            or not mandatory.issubset(selected)
+            or {u["family"] for u in subset} != {u["family"] for u in plan["roster"]}
+        ):
+            raise ValueError("screen must cover every family, batch and exemplar")
     if (
         plan["bootstrap_samples"] != BOOTSTRAPS
         or plan["analysis_seed"] != ANALYSIS_SEED
@@ -284,7 +324,7 @@ def run_plan(
     started = time.monotonic()
     stop_reason = "completed-once"
     for group in range(-1, plan["repeats"]):
-        for unit in plan["roster"]:
+        for unit in execution_roster(plan):
             arms = list(plan["images"])
             if group % 2:
                 arms.reverse()
@@ -337,26 +377,6 @@ def run_plan(
                     raw["verification"] = gate_output(
                         ROOT / "units" / unit["unit"], run_root / "output"
                     )
-                    raw["artifacts"] = [
-                        index(p)
-                        for p in sorted((run_root / "output").rglob("*"))
-                        if p.is_file()
-                    ]
-                    # Output bytes are measured, but do not stand in for peak writable
-                    # container disk. Until quota/peak telemetry is available G2 stays missing.
-                    raw["resources"] = {
-                        "peak_memory_bytes": result.host_peak_memory_bytes,
-                        "output_bytes": sum(
-                            p.stat().st_size
-                            for p in (run_root / "output").rglob("*")
-                            if p.is_file()
-                        ),
-                        "peak_disk_bytes": result.host_peak_disk_bytes,
-                        "disk_capacity_bytes": result.disk_capacity_bytes,
-                        "disk_status": "bounded"
-                        if result.disk_capacity_bytes
-                        else "missing",
-                    }
                     raw["status"] = (
                         "passed" if raw["verification"]["admissible"] else "failed"
                     )
@@ -365,6 +385,30 @@ def run_plan(
                     if hasattr(exc, "measurement"):
                         raw["measurement"] = asdict(exc.measurement)
                     raw["error"] = {"kind": type(exc).__name__, "message": str(exc)}
+                # run_once retains only sanitized output, including partial output
+                # from failed invocations. Index it even when timing or gating failed.
+                if (run_root / "output").is_dir():
+                    raw["output_dir"] = str(run_root / "output")
+                    raw["artifacts"] = [
+                        index(p)
+                        for p in sorted((run_root / "output").rglob("*"))
+                        if p.is_file()
+                    ]
+                if "measurement" in raw:
+                    measured = raw["measurement"]
+                    # Retained bytes cannot substitute for peak writable disk.
+                    raw["resources"] = {
+                        "peak_memory_bytes": measured["host_peak_memory_bytes"],
+                        "output_bytes": sum(
+                            Path(entry["path"]).stat().st_size
+                            for entry in raw.get("artifacts", [])
+                        ),
+                        "peak_disk_bytes": measured["host_peak_disk_bytes"],
+                        "disk_capacity_bytes": measured["disk_capacity_bytes"],
+                        "disk_status": "bounded"
+                        if measured["disk_capacity_bytes"]
+                        else "missing",
+                    }
                 raw["logs"] = [index(p) for p in sorted(run_root.glob("*.log"))]
                 raw["finished_at"] = now()
                 save(run_root / "record.json", raw)
@@ -476,8 +520,8 @@ def assess(evidence_path: Path) -> dict:
     expected = {
         (a, u["unit"], g)
         for a in plan["images"]
-        for u in plan["roster"]
-        for g in range(-1, REPEATS)
+        for u in execution_roster(plan)
+        for g in range(-1, plan["repeats"])
     }
     actual = {(r["arm"], r["unit"], r["group"]) for r in records}
     if actual != expected or len(actual) != len(records):
@@ -548,7 +592,7 @@ def assess(evidence_path: Path) -> dict:
             elif value > cap:
                 reasons.append("resource-cap-exceeded")
     for arm in plan["images"]:
-        for unit in plan["roster"]:
+        for unit in execution_roster(plan):
             repeats = [
                 r.get("parquet_sha256")
                 for r in records
@@ -558,9 +602,9 @@ def assess(evidence_path: Path) -> dict:
                 reasons.append("byte-repeat-failure")
     if not plan["host"]["native"] or evidence.get("diagnostic"):
         reasons.append("not-native-qualification")
-    if plan["holdout"] is None:
+    if plan["holdout"] is None and plan["purpose"] != "screen":
         reasons.append("missing-independent-validation")
-    else:
+    elif plan["holdout"] is not None:
         from validate_candidate_parameters import validate as validate_holdout
 
         heldouts = read_index(plan["holdout"])
@@ -586,7 +630,7 @@ def assess(evidence_path: Path) -> dict:
         "byte-repeat-failure",
         "invalid-raw-output",
     }
-    if not measurement_errors.intersection(reasons):
+    if plan["purpose"] != "screen" and not measurement_errors.intersection(reasons):
         score = paired_statistics(plan, [r for r in records if r["group"] >= 0])
     g2 = (
         "pass"
@@ -598,6 +642,11 @@ def assess(evidence_path: Path) -> dict:
         else "missing"
     )
     g3 = "missing"
+    screen_status = None
+    if plan["purpose"] == "screen":
+        screen_status = "pass" if g2 == "pass" else g2
+        g2 = "missing"
+        reasons.append("screening-only-not-qualification")
     if (
         score
         and len(plan["images"]) == 2
@@ -624,8 +673,14 @@ def assess(evidence_path: Path) -> dict:
         "plan_sha256": plan["plan_sha256"],
         "images": plan["images"],
         "purpose": plan["purpose"],
+        "screen_status": screen_status,
+        "executed_units": len({r["unit"] for r in records}),
         "exemplar_semantics": "unknown",
-        "next_action": "repair-correctness"
+        "next_action": "freeze-independent-confirmation"
+        if screen_status == "pass"
+        else "repair-screen-failure"
+        if screen_status == "fail"
+        else "repair-correctness"
         if g2 == "fail"
         else "supply-missing-evidence"
         if g2 != "pass"

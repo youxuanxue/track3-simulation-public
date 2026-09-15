@@ -90,6 +90,13 @@ no paid runner is configured. Its raw artifacts include failures.
 
 ## Paired confirmation and candidate history
 
+Use `freeze --purpose screen` for a bounded first check. It pins the shortest and
+longest public horizon in each family, every batch and the unchanged full exemplar,
+then runs one warm-up and one sample within the declared budget and per-unit timeout.
+The complete roster remains recorded in the plan. Screening reports only a screen
+verdict: it never produces a partial-roster score, a confidence interval, G2 or G3.
+Even a successful screen requires a separately frozen complete confirmation.
+
 For a challenge, freeze `--purpose confirmation --baseline "$B0" --image "$B1"`
 with a new output path, the fixed hypothesis and both images' independent evidence.
 The protocol warms each version independently, then alternates A/B order across

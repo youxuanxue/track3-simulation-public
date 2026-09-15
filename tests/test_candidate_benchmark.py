@@ -102,6 +102,94 @@ def test_hash_index_detects_changed_evidence(tmp_path):
         bench.read_index(entry)
 
 
+@pytest.mark.parametrize("unsafe", [False, True])
+def test_failed_container_preserves_measurement_and_safe_evidence(
+    tmp_path, monkeypatch, unsafe
+):
+    import subprocess
+    from throughput import run_unit as runner
+
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    (unit / "scenario.json").write_text("{}")
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"must not be copied")
+
+    def failed_run(cmd, **kwargs):
+        output = Path(next(s[:-8] for s in cmd if s.endswith(":/output")))
+        (output / "trace.parquet").write_bytes(b"partial parquet bytes")
+        if unsafe:
+            (output / "events.json").symlink_to(outside)
+        return (
+            subprocess.CompletedProcess(cmd, 137, b"progress", b"killed"),
+            12.5,
+            None,
+            123456,
+        )
+
+    monkeypatch.setattr(runner, "timed_container_run", failed_run)
+    retained = tmp_path / "retained"
+    logs = tmp_path / "logs"
+    with pytest.raises(runner.UnitExecutionError, match="code 137") as caught:
+        runner.run_once(
+            "fixture", unit, batch=False, keep_output=retained, log_dir=logs
+        )
+    measured = caught.value.measurement
+    assert (
+        measured.returncode,
+        measured.host_wall_clock_sec,
+        measured.host_peak_memory_bytes,
+    ) == (137, 12.5, 123456)
+    assert (logs / "stdout.log").read_bytes() == b"progress"
+    assert (logs / "stderr.log").read_bytes() == b"killed"
+    if unsafe:
+        assert not retained.exists()
+        assert "refused" in (logs / "retention-error.log").read_text()
+        assert outside.read_bytes() == b"must not be copied"
+    else:
+        assert (retained / "trace.parquet").read_bytes() == b"partial parquet bytes"
+
+
+def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch):
+    from throughput import run_unit as runner
+
+    frozen = {
+        "purpose": "baseline",
+        "host": {},
+        "repeats": 0,
+        "roster": [{"unit": "fixture", "batch": False, "input_sha256": "input"}],
+        "images": {"A": "image"},
+        "budget_sec": 60,
+        "timeout_sec": 30,
+        "plan_sha256": "fixture",
+        "history_dir": str(tmp_path / "history"),
+    }
+    plan_path = tmp_path / "plan.json"
+    bench.save(plan_path, frozen)
+    monkeypatch.setattr(bench, "validate_plan", lambda *a, **kw: None)
+    monkeypatch.setattr(bench, "host", lambda: {})
+
+    def failed_run(*args, **kwargs):
+        output = kwargs["keep_output"]
+        output.mkdir()
+        (output / "trace.parquet").write_bytes(b"retained partial output")
+        (kwargs["log_dir"] / "stderr.log").write_bytes(b"killed")
+        raise runner.UnitExecutionError(
+            "exit 137", runner.UnitRun(0, 0, 0, 12.5, None, 123456, 137)
+        )
+
+    monkeypatch.setattr(runner, "run_once", failed_run)
+    evidence = bench.run_plan(plan_path, tmp_path / "run", diagnostic=True)
+    raw = bench.read_index(evidence["runs"][0])
+    assert raw["status"] == "failed" and raw["rankable"] is False
+    assert raw["measurement"]["returncode"] == 137
+    assert raw["resources"]["peak_memory_bytes"] == 123456
+    assert raw["resources"]["output_bytes"] == len(b"retained partial output")
+    assert raw["resources"]["disk_status"] == "missing"
+    assert raw["artifacts"] == [bench.index(Path(raw["output_dir"]) / "trace.parquet")]
+    assert raw["logs"][0]["sha256"] == bench.file_digest(Path(raw["logs"][0]["path"]))
+
+
 def decision(g2="pass", g3="pass", purpose="confirmation"):
     return {
         "G2": g2,
@@ -302,6 +390,80 @@ def test_full_roster_assessment_derives_positive_gain(full_evidence):
     assert result["G2"] == result["G3"] == "pass"
     assert len(result["statistics"]["units"]) == 72
     assert result["exemplar_semantics"] == "unknown" and result["rankable"] is False
+
+
+def test_screen_selects_short_long_all_batches_and_exemplar(tmp_path, monkeypatch):
+    units = []
+    for family in ("first", "second"):
+        for i, horizon in enumerate((20, 10, 30)):
+            name = f"{family}-{i}"
+            units.append({"unit": name, "family": family, "batch": False})
+            bench.save(
+                tmp_path / "units" / name / "scenario.json", {"horizon_ns": horizon}
+            )
+    units.extend(
+        [
+            {"unit": "batch", "family": "first", "batch": True},
+            {"unit": bench.EXEMPLAR, "family": "second", "batch": False},
+        ]
+    )
+    bench.save(
+        tmp_path / "units" / bench.EXEMPLAR / "scenario.json", {"horizon_ns": 20}
+    )
+    monkeypatch.setattr(bench, "ROOT", tmp_path)
+    assert set(bench.select_screen_units(units)) == {
+        "first-1",
+        "first-2",
+        "second-1",
+        "second-2",
+        "batch",
+        bench.EXEMPLAR,
+    }
+
+
+def test_screen_evidence_never_yields_qualification_or_partial_score(full_evidence):
+    evidence_path, frozen = full_evidence
+    frozen.update(
+        purpose="screen",
+        repeats=1,
+        screen_units=[u["unit"] for u in frozen["roster"][:7]],
+        holdout=None,
+    )
+    frozen["plan_sha256"] = bench.digest(
+        {k: v for k, v in frozen.items() if k != "plan_sha256"}
+    )
+    evidence = json.loads(evidence_path.read_text())
+    plan_path = Path(evidence["plan"]["path"])
+    plan_path.write_text(json.dumps(frozen))
+    evidence["plan"] = bench.index(plan_path)
+    entries = []
+    for entry in evidence["runs"]:
+        row = bench.read_index(entry)
+        if row["unit"] in frozen["screen_units"] and row["group"] < 1:
+            row["plan_sha256"] = frozen["plan_sha256"]
+            path = Path(entry["path"])
+            path.write_text(json.dumps(row))
+            entries.append(bench.index(path))
+    evidence["runs"] = entries
+    evidence_path.write_text(json.dumps(evidence))
+    result = bench.assess(evidence_path)
+    assert result["screen_status"] == "pass"
+    assert result["executed_units"] == 7
+    assert result["statistics"] is None
+    assert result["G2"] == result["G3"] == "missing"
+    assert result["rankable"] is False
+    evidence["runs"] = entries[:-1]
+    evidence_path.write_text(json.dumps(evidence))
+    incomplete = bench.assess(evidence_path)
+    assert incomplete["screen_status"] != "pass"
+    assert incomplete["G2"] == incomplete["G3"] == "missing"
+    assert incomplete["statistics"] is None
+    frozen["screen_units"] = frozen["screen_units"][:-1]
+    frozen["plan_sha256"] = bench.digest(
+        {k: v for k, v in frozen.items() if k != "plan_sha256"}
+    )
+    with pytest.raises(ValueError, match="every family"):
+        bench.validate_plan(frozen)
 
 
 @pytest.mark.parametrize(

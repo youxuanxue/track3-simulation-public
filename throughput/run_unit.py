@@ -344,11 +344,13 @@ def run_once(
             (log_dir / "stdout.log").write_bytes(proc.stdout)
             (log_dir / "stderr.log").write_bytes(proc.stderr)
         if proc.returncode != 0:
+            from qfbench2_common.sanitize import TreeRefused
+
             tail = proc.stderr[-2000:].decode("utf-8", errors="replace")
             if keep_output is not None and any(out_dir.iterdir()):
                 try:
                     retain_output(out_dir, keep_output, unit_dir)
-                except (OSError, ValueError) as exc:
+                except (OSError, ValueError, TreeRefused) as exc:
                     if log_dir is not None:
                         (log_dir / "retention-error.log").write_text(str(exc))
             raise UnitExecutionError(

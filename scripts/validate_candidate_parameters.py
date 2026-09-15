@@ -71,9 +71,15 @@ def variant(config: dict, seed: int, n: int) -> dict:
     return result
 
 
-def generate(output: Path, seed: int, reference_image: str) -> dict:
+def generate(
+    output: Path,
+    seed: int,
+    reference_image: str,
+    execution_platform: str = "linux/amd64",
+) -> dict:
     if "@sha256:" not in reference_image:
         raise ValueError("reference image must use a fixed digest")
+    bench.execution_platform({"execution_platform": execution_platform})
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     roster = bench.roster()
@@ -130,6 +136,7 @@ def generate(output: Path, seed: int, reference_image: str) -> dict:
         )
     plan = {
         "kind": "heldout-plan",
+        "execution_platform": execution_platform,
         "profile": "developer",
         "rankable": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -208,6 +215,13 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     if "@sha256:" not in image:
         raise ValueError("candidate must use a registry digest")
     plan = json.loads(plan_path.read_text())
+    target = bench.execution_platform(plan)
+    for selected in {image, plan["reference_image"]}:
+        inspected = json.loads(
+            subprocess.check_output(["docker", "image", "inspect", selected])
+        )[0]
+        if inspected["Os"] + "/" + inspected["Architecture"] != target:
+            raise ValueError("heldout image architecture differs from plan")
     validator = validation_identity()
     if plan["sha256"] != bench.digest({k: v for k, v in plan.items() if k != "sha256"}):
         raise ValueError("heldout plan changed")
@@ -267,7 +281,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
                     "docker",
                     "run",
                     "--rm",
-                    "--platform=linux/amd64",
+                    f"--platform={target}",
                     "--network=none",
                     "--cpus=4",
                     "--memory=16g",
@@ -320,7 +334,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
         "docker",
         "run",
         "--rm",
-        "--platform=linux/amd64",
+        f"--platform={target}",
         "--network=none",
         "--cpus=4",
         "--memory=16g",
@@ -339,6 +353,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     (fallback_dir / "stderr.log").write_bytes(proc.stderr)
     result = {
         "kind": "heldout-result",
+        "execution_platform": target,
         "profile": "developer",
         "rankable": False,
         "image": image,
@@ -366,7 +381,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     return result
 
 
-def validate(result: dict, image: str) -> None:
+def validate(result: dict, image: str, execution_platform: str = "linux/amd64") -> None:
     if (
         result.get("kind") != "heldout-result"
         or result.get("image") != image
@@ -376,6 +391,11 @@ def validate(result: dict, image: str) -> None:
     plan = bench.read_index(result["plan"])
     if plan["sha256"] != bench.digest({k: v for k, v in plan.items() if k != "sha256"}):
         raise ValueError("heldout plan changed")
+    if (
+        bench.execution_platform(plan) != execution_platform
+        or bench.execution_platform(result) != execution_platform
+    ):
+        raise ValueError("heldout execution platform mismatch")
     for case in plan["cases"]:
         for entry in case["inputs"]:
             bench.read_index(entry)
@@ -490,6 +510,11 @@ def main() -> int:
     gen.add_argument("--seed", type=int, required=True)
     gen.add_argument("--out", type=Path, required=True)
     gen.add_argument("--reference-image", required=True)
+    gen.add_argument(
+        "--execution-platform",
+        choices=("linux/amd64", "linux/arm64"),
+        default="linux/amd64",
+    )
     execute = sub.add_parser("run")
     execute.add_argument("--plan", type=Path, required=True)
     execute.add_argument("--image", required=True)
@@ -502,7 +527,9 @@ def main() -> int:
         if args.action == "reference-wheels":
             result = reference_wheels(args.out)
         elif args.action == "generate":
-            result = generate(args.out, args.seed, args.reference_image)
+            result = generate(
+                args.out, args.seed, args.reference_image, args.execution_platform
+            )
         else:
             result = run(args.plan, args.image, args.out, args.timeout)
         print(json.dumps(result, indent=2))

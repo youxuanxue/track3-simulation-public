@@ -52,7 +52,11 @@ def no_network(monkeypatch):
     monkeypatch.setattr(
         module,
         "anonymous_pull",
-        lambda c, p: {"image": module.candidate_image(c), "anonymous_pull": True},
+        lambda c, p, execution_platform="linux/amd64": {
+            "image": module.candidate_image(c),
+            "anonymous_pull": True,
+            "platform": execution_platform,
+        },
     )
 
 

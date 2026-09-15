@@ -17,6 +17,16 @@ complete local correctness and resource evidence, and a measured improvement ove
 the current stable candidate. Each attempt either promotes a proven candidate or
 produces evidence that determines the next repair or experiment.
 
+## 当前授权的本地验收范围
+
+用户已授权先在 Mac 上的原生 Linux arm64 独立实例建立本地 B0/B1：
+4 CPU、16 GiB 内存、64 GiB 有界输出盘、离线执行。完整 roster、重复次数、
+独立参数对比及收益区间要求不变；所有证据标记 `rankable=false` 和
+`qualification_scope=local-arm64`。G1 在这个范围核实 arm64 镜像和真实团队封包；
+下文正式 linux/amd64 与官方 10G 适配单独验收，不由本地通过推导。
+exemplar 没有公开参考，完整检查 schema、解码行数、事件计数、确定性及资源，
+语义比较继续标记 `unknown`。不同平台或资源口径不得共用晋级历史。
+
 ## 决策与目标
 
 **夺冠主线：尽早取得一份可靠候选与平台反馈，在完整语义守住的前提下提高可复现的

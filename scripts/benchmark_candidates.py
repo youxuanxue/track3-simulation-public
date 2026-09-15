@@ -39,6 +39,27 @@ CAPS = {
 EXEMPLAR = "t3-EXAMPLE-vectorized-matching"
 
 
+def execution_platform(plan: dict) -> str:
+    value = plan.get("execution_platform", "linux/amd64")
+    if value not in {"linux/amd64", "linux/arm64"}:
+        raise ValueError("unsupported execution platform")
+    return value
+
+
+def validate_caps(plan: dict) -> dict:
+    """The arm64 local experiment may declare a larger disk; amd64 stays frozen."""
+    caps = plan["caps"]
+    allowed_disks = {CAPS["disk_bytes"]}
+    if execution_platform(plan) == "linux/arm64":
+        allowed_disks.add(64 * 1024**3)
+    if (
+        caps.get("disk_bytes") not in allowed_disks
+        or {**caps, "disk_bytes": CAPS["disk_bytes"]} != CAPS
+    ):
+        raise ValueError("unexpected resource policy")
+    return caps
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -89,6 +110,7 @@ def identity() -> dict:
         ROOT / "baselines/Dockerfile.native-candidate",
         ROOT / "simulate",
         ROOT / "simulate-batch",
+        ROOT / "templates/trace_column_registry.json",
     ]
     return {
         "source_commit": subprocess.check_output(
@@ -150,8 +172,8 @@ def host() -> dict:
         "kernel": info["KernelVersion"],
         "storage": info["Driver"],
         "native": platform.system() == "Linux"
-        and platform.machine() in {"x86_64", "amd64"}
-        and info["Architecture"] in {"x86_64", "amd64"},
+        and normalized_arch(platform.machine()) == normalized_arch(info["Architecture"])
+        and normalized_arch(platform.machine()) in {"amd64", "arm64"},
     }
 
 
@@ -186,10 +208,14 @@ def freeze(args: argparse.Namespace) -> dict:
             "@sha256:" not in image or len(image.rsplit("@sha256:", 1)[1]) != 64
         ):
             raise ValueError("only fixed image digests may enter a plan")
+    target = getattr(args, "execution_platform", "linux/amd64")
+    disk_gib = getattr(args, "disk_gib", 10)
     plan = {
         "schema": 1,
         "profile": "developer",
         "rankable": False,
+        "execution_platform": target,
+        "qualification_scope": "local-arm64" if target == "linux/arm64" else "amd64",
         "created_at": now(),
         "round_id": args.round,
         "purpose": args.purpose,
@@ -198,7 +224,7 @@ def freeze(args: argparse.Namespace) -> dict:
         "identity": identity(),
         "roster": roster(),
         "host": host(),
-        "caps": CAPS,
+        "caps": {**CAPS, "disk_bytes": disk_gib * 1024**3},
         "images": {"A": args.baseline or args.image, "B": args.image}
         if args.baseline
         else {"A": args.image},
@@ -221,6 +247,7 @@ def freeze(args: argparse.Namespace) -> dict:
     }
     if args.purpose == "screen":
         plan["screen_units"] = select_screen_units(plan["roster"])
+    validate_caps(plan)
     plan["plan_sha256"] = digest(plan)
     save(args.out, plan)
     return plan
@@ -235,7 +262,8 @@ def validate_plan(plan: dict, *, current: bool = False) -> None:
     if plan["rankable"] is not False or plan["profile"] != "developer":
         raise ValueError("local plans must be non-rankable")
     repeats = 1 if plan["purpose"] == "screen" else REPEATS
-    if plan["repeats"] != repeats or plan["warmups"] != 1 or plan["caps"] != CAPS:
+    validate_caps(plan)
+    if plan["repeats"] != repeats or plan["warmups"] != 1:
         raise ValueError("unexpected measurement protocol")
     if plan["purpose"] == "screen":
         selected = plan.get("screen_units", [])
@@ -275,6 +303,10 @@ def gate_output(unit: Path, output: Path) -> dict:
     from qfbench2_common.smoke import run_smoke
     from qfbench2_track_simulation.scoring import build_developer_verifier
 
+    if unit.name == EXEMPLAR and not (unit / "trace.parquet").exists():
+        from check_exemplar_output import verify
+
+        return verify(unit, output)
     result = run_smoke(unit, output, build_developer_verifier)
     return {
         "admissible": result.admissible,
@@ -290,13 +322,25 @@ def gate_output(unit: Path, output: Path) -> dict:
     }
 
 
-def require_native_host(measured_host: dict) -> None:
+def normalized_arch(arch: str) -> str:
+    return {"x86_64": "amd64", "aarch64": "arm64"}.get(arch, arch)
+
+
+def require_native_host(measured_host: dict, target: str = "linux/amd64") -> None:
     # Card resources are container maxima. Linux MemTotal excludes kernel-reserved
     # RAM, so comparing it to a 16 GiB container limit rejects ordinary 16 GiB hosts.
     # The actual complete run, enforced limits and peak telemetry establish G2.
-    if not measured_host["native"] or measured_host["docker_cpus"] < CAPS["cpus"]:
+    arch = target.split("/")[1]
+    if (
+        not measured_host["native"]
+        or measured_host["docker_cpus"] < CAPS["cpus"]
+        or any(
+            normalized_arch(measured_host.get(key, arch)) != arch
+            for key in ("arch", "docker_arch")
+        )
+    ):
         raise ValueError(
-            "native linux/amd64 with four CPUs is required; diagnostics cannot qualify"
+            f"native {target} with four CPUs is required; diagnostics cannot qualify"
         )
 
 
@@ -337,7 +381,17 @@ def run_plan(
     plan = json.loads(plan_path.read_text())
     validate_plan(plan, current=True)
     if not diagnostic:
-        require_native_host(plan["host"])
+        require_native_host(plan["host"], execution_platform(plan))
+        for image in set(plan["images"].values()):
+            inspected = json.loads(
+                subprocess.check_output(["docker", "image", "inspect", image])
+            )[0]
+            if inspected["Os"] + "/" + inspected["Architecture"] != execution_platform(
+                plan
+            ):
+                raise ValueError(
+                    "image architecture differs from the frozen execution platform"
+                )
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     save(output / "plan.json", plan)
@@ -376,7 +430,9 @@ def run_plan(
                 raw = {
                     "profile": "developer",
                     "rankable": False,
-                    "retention_byte_limits": retention_byte_limits(),
+                    "retention_byte_limits": retention_byte_limits(
+                        plan.get("caps", CAPS)["disk_bytes"]
+                    ),
                     "plan_sha256": plan["plan_sha256"],
                     "host": plan["host"],
                     "image": plan["images"][arm],
@@ -399,6 +455,7 @@ def run_plan(
                         keep_output=run_root / "output",
                         scratch_root=scratch_volume or run_root,
                         bounded_disk=scratch_volume is not None,
+                        disk_limit_bytes=plan.get("caps", CAPS)["disk_bytes"],
                         log_dir=run_root,
                         run_as_host_user=True,
                         timeout_sec=min(
@@ -581,6 +638,7 @@ def assess(evidence_path: Path) -> dict:
     evidence = json.loads(evidence_path.read_text())
     plan = read_index(evidence["plan"])
     validate_plan(plan, current=True)
+    caps = validate_caps(plan)
     records = [read_index(entry) for entry in evidence["runs"]]
     reasons = []
     expected = {
@@ -620,17 +678,45 @@ def assess(evidence_path: Path) -> dict:
 
                 allowed_files = set(stable_paths_for(ROOT / "units" / unit["unit"]))
                 gates = r["verification"]["gates"]
+                checked_gates = gates
+                if unit["unit"] == EXEMPLAR:
+                    if (
+                        set(gates)
+                        != {
+                            "g0_integrity",
+                            "g1_schema",
+                            "g2_cutoff_resource",
+                            "g3_domain_semantics",
+                        }
+                        or r["verification"].get("semantic_status") != "unknown"
+                        or gates.get("g3_domain_semantics", {}).get("passed")
+                        is not None
+                        or r["verification"].get("local_trace_checks", {}).get("passed")
+                        is not True
+                    ):
+                        raise ValueError(
+                            "exemplar must preserve unknown reference semantics"
+                        )
+                    checked_gates = {
+                        k: v for k, v in gates.items() if k != "g3_domain_semantics"
+                    }
                 if (
                     not expected_files.issubset(hashes)
                     or not set(hashes).issubset(allowed_files)
                     or hashes != r["parquet_sha256"]
                     or len(gates) != 4
-                    or not all(g["passed"] for g in gates.values())
+                    or not all(g["passed"] for g in checked_gates.values())
                     or not r.get("artifacts")
                     or not r.get("logs")
                 ):
                     raise ValueError("incomplete raw outputs or gates")
                 measured = r["measurement"]
+                if (
+                    unit["unit"] == EXEMPLAR
+                    and r["verification"]["local_trace_checks"].get("decoded_rows")
+                    != measured["n_events"]
+                ):
+                    raise ValueError("exemplar decoded count differs from host count")
                 if (
                     _host_n_events(output_dir, unit["batch"]) != measured["n_events"]
                     or _reported_n_events(output_dir, unit["batch"])
@@ -649,12 +735,12 @@ def assess(evidence_path: Path) -> dict:
         if (
             resources.get("disk_status") != "bounded"
             or not isinstance(capacity, int)
-            or not 0 < capacity <= CAPS["disk_bytes"]
+            or not 0 < capacity <= caps["disk_bytes"]
         ):
             reasons.append("missing-disk-bound")
         for key, cap in (
-            ("peak_memory_bytes", CAPS["memory_bytes"]),
-            ("peak_disk_bytes", CAPS["disk_bytes"]),
+            ("peak_memory_bytes", caps["memory_bytes"]),
+            ("peak_disk_bytes", caps["disk_bytes"]),
         ):
             value = resources.get(key)
             if not isinstance(value, int) or value <= 0:
@@ -672,6 +758,11 @@ def assess(evidence_path: Path) -> dict:
                 reasons.append("byte-repeat-failure")
     if not plan["host"]["native"] or evidence.get("diagnostic"):
         reasons.append("not-native-qualification")
+    if "docker_arch" in plan["host"]:
+        try:
+            require_native_host(plan["host"], execution_platform(plan))
+        except ValueError:
+            reasons.append("wrong-execution-platform")
     if plan["holdout"] is None and plan["purpose"] != "screen":
         reasons.append("missing-independent-validation")
     elif plan["holdout"] is not None:
@@ -685,7 +776,7 @@ def assess(evidence_path: Path) -> dict:
                 continue
             try:
                 result = read_index(entry)
-                validate_holdout(result, image)
+                validate_holdout(result, image, execution_platform(plan))
                 for key in ("toolkit_version", "toolkit_source", "scorer_sha256"):
                     if result["identity"][key] != plan["identity"][key]:
                         raise ValueError("heldout verifier changed")
@@ -735,6 +826,11 @@ def assess(evidence_path: Path) -> dict:
     return {
         "profile": "developer",
         "rankable": False,
+        "execution_platform": execution_platform(plan),
+        "qualification_scope": "local-arm64"
+        if execution_platform(plan) == "linux/arm64"
+        else "amd64",
+        "caps": caps,
         "G2": g2,
         "G3": g3,
         "reasons": sorted(set(reasons)),
@@ -827,6 +923,16 @@ def decide(
         stable = events[-1]["stable"] if events else None
         if stable != baseline_expected:
             raise ValueError("stable pointer changed; compare again")
+        previous_policy = next(
+            (e["decision"] for e in reversed(events) if "decision" in e), None
+        )
+        if previous_policy and (
+            execution_platform(previous_policy) != result["execution_platform"]
+            or previous_policy.get("caps", CAPS) != result["caps"]
+        ):
+            raise ValueError(
+                "candidate history belongs to another platform/resource policy"
+            )
         for image in result["images"].values():
             _, report = g1.get(image, (None, {}))
             if (
@@ -836,7 +942,9 @@ def decide(
             ):
                 result["reasons"].append("missing-G1")
                 continue
-            preparation.validate_delivery(report["delivery"], image)
+            preparation.validate_delivery(
+                report["delivery"], image, result["execution_platform"]
+            )
             if file_digest(Path(report["archive"])) != report["archive_sha256"]:
                 raise ValueError("submission package changed")
         result["G1"] = "missing" if "missing-G1" in result["reasons"] else "pass"
@@ -948,6 +1056,12 @@ def main() -> int:
     freeze_p.add_argument("--round", required=True)
     freeze_p.add_argument("--hypothesis", required=True)
     freeze_p.add_argument("--timeout", type=float, default=1800)
+    freeze_p.add_argument(
+        "--execution-platform",
+        choices=("linux/amd64", "linux/arm64"),
+        default="linux/amd64",
+    )
+    freeze_p.add_argument("--disk-gib", type=int, choices=(10, 64), default=10)
     freeze_p.add_argument("--budget", type=float, required=True)
     freeze_p.add_argument("--holdout", type=Path)
     freeze_p.add_argument("--history", type=Path, default=ROOT / "out/candidates")

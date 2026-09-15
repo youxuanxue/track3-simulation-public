@@ -265,6 +265,8 @@ def decision(g2="pass", g3="pass", purpose="confirmation"):
         "reasons": [],
         "evidence": {"path": "fixture", "sha256": "fixture"},
         "rankable": False,
+        "execution_platform": "linux/amd64",
+        "caps": bench.CAPS,
     }
 
 
@@ -833,3 +835,47 @@ def test_kernel_reserved_host_memory_is_not_a_container_limit_failure():
         bench.require_native_host(
             {"native": False, "docker_cpus": 4, "docker_memory": 32 * 1024**3}
         )
+
+
+def test_promotion_refuses_mixed_platform_history(state, monkeypatch, tmp_path):
+    directory, g1s = state
+    local = decision()
+    local.update(
+        execution_platform="linux/arm64",
+        caps={**bench.CAPS, "disk_bytes": 64 * 1024**3},
+    )
+    monkeypatch.setattr(bench, "assess", lambda _: local)
+    with pytest.raises(ValueError, match="another platform/resource policy"):
+        bench.decide(directory, tmp_path / "evidence", g1s, "a")
+
+
+@pytest.mark.parametrize("decoded_rows", [1000, 999])
+def test_full_assessment_preserves_exemplar_unknown(
+    full_evidence, monkeypatch, decoded_rows
+):
+    evidence_path, frozen = full_evidence
+    # Treat one fixture unit as the exemplar without weakening checks for the rest.
+    monkeypatch.setattr(bench, "EXEMPLAR", "unit-00")
+    evidence = json.loads(evidence_path.read_text())
+    for entry in evidence["runs"]:
+        raw = bench.read_index(entry)
+        if raw["unit"] != "unit-00":
+            continue
+        raw["verification"] = {
+            "admissible": True,
+            "semantic_status": "unknown",
+            "local_trace_checks": {"passed": True, "decoded_rows": decoded_rows},
+            "gates": {
+                "g0_integrity": {"passed": True},
+                "g1_schema": {"passed": True},
+                "g2_cutoff_resource": {"passed": True},
+                "g3_domain_semantics": {"passed": None},
+            },
+        }
+        path = Path(entry["path"])
+        path.write_text(json.dumps(raw))
+        entry["sha256"] = bench.file_digest(path)
+    evidence_path.write_text(json.dumps(evidence))
+    result = bench.assess(evidence_path)
+    assert result["G2"] == ("pass" if decoded_rows == 1000 else "missing")
+    assert result["exemplar_semantics"] == "unknown"

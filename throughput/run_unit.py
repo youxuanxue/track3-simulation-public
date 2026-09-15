@@ -63,9 +63,12 @@ from .timer import DEFAULT_RUN_TIMEOUT_SEC, gpu_docker_args, timed_container_run
 LOCAL_DISK_BYTES = 10 * 1024**3
 
 
-def retention_byte_limits() -> dict[str, int]:
-    """Allow any output that fits the local 10 GiB runtime disk to be retained."""
-    return {"max_file_bytes": LOCAL_DISK_BYTES, "max_total_bytes": LOCAL_DISK_BYTES}
+def retention_byte_limits(byte_limit: int | None = None) -> dict[str, int]:
+    """Allow any output that fits the declared local runtime disk to be retained."""
+    cap = LOCAL_DISK_BYTES if byte_limit is None else byte_limit
+    if not isinstance(cap, int) or cap <= 0:
+        raise ValueError("local output byte limit must be positive")
+    return {"max_file_bytes": cap, "max_total_bytes": cap}
 
 
 @dataclass
@@ -172,7 +175,9 @@ def _host_n_events(out_dir: Path, batch: bool) -> int:
     return int(pq.ParquetFile(out_dir / "trace.parquet").metadata.num_rows)
 
 
-def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
+def retain_output(
+    out_dir: Path, destination: Path, unit_dir: Path, *, byte_limit: int | None = None
+) -> None:
     """Copy the run's output into ``destination`` through the shared C3 no-follow primitives.
 
     Two measured defects are closed here.
@@ -214,7 +219,7 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = staging_sibling(destination)
-    limits = TreeLimits(**retention_byte_limits())
+    limits = TreeLimits(**retention_byte_limits(byte_limit))
     try:
         result = materialize_tree(
             out_dir, staging, allowed_paths=allowed_paths_for(unit_dir), limits=limits
@@ -256,6 +261,7 @@ def run_once(
     run_as_host_user: bool = False,
     scratch_root: Path | None = None,
     bounded_disk: bool = False,
+    disk_limit_bytes: int = LOCAL_DISK_BYTES,
     log_dir: Path | None = None,
 ) -> UnitRun:
     """One timed, DEADLINE-BOUNDED container invocation of the unit.
@@ -272,8 +278,8 @@ def run_once(
             raise ValueError("bounded disk requires a dedicated Linux scratch mount")
         fs = os.statvfs(str(scratch_root))
         capacity = fs.f_blocks * fs.f_frsize
-        if not 0 < capacity <= LOCAL_DISK_BYTES:
-            raise ValueError("scratch filesystem capacity must be at most 10 GiB")
+        if not 0 < capacity <= disk_limit_bytes:
+            raise ValueError("scratch filesystem exceeds the declared disk byte limit")
     with (
         tempfile.TemporaryDirectory(prefix="t3_in_", dir=scratch_root) as in_tmp,
         tempfile.TemporaryDirectory(
@@ -363,7 +369,9 @@ def run_once(
             tail = proc.stderr[-2000:].decode("utf-8", errors="replace")
             if keep_output is not None and any(out_dir.iterdir()):
                 try:
-                    retain_output(out_dir, keep_output, unit_dir)
+                    retain_output(
+                        out_dir, keep_output, unit_dir, byte_limit=disk_limit_bytes
+                    )
                 except (OSError, ValueError, TreeRefused) as exc:
                     if log_dir is not None:
                         (log_dir / "retention-error.log").write_text(str(exc))
@@ -397,7 +405,7 @@ def run_once(
             )
 
         if keep_output is not None:
-            retain_output(out_dir, keep_output, unit_dir)
+            retain_output(out_dir, keep_output, unit_dir, byte_limit=disk_limit_bytes)
         eps = n_events / wall_clock if wall_clock > 0 else 0.0
         return UnitRun(
             eps,

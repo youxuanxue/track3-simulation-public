@@ -148,8 +148,12 @@ def repeat_artifacts(unit: Path) -> set[str]:
     return {prefix + name for prefix in prefixes for name in names}
 
 
-def anonymous_pull(candidate: dict, output: Path) -> dict:
+def anonymous_pull(
+    candidate: dict, output: Path, execution_platform: str = "linux/amd64"
+) -> dict:
     """Pull using an empty Docker auth config, preserving only the daemon endpoint."""
+    if execution_platform not in {"linux/amd64", "linux/arm64"}:
+        raise ValueError("unsupported execution platform")
     image = candidate_image(candidate)
     public_image(candidate["image"])
     endpoint = os.environ.get("DOCKER_HOST")
@@ -166,7 +170,7 @@ def anonymous_pull(candidate: dict, output: Path) -> dict:
             "--host",
             endpoint,
             "pull",
-            "--platform=linux/amd64",
+            "--platform=" + execution_platform,
             image,
         ]
         with (output / "anonymous-pull.log").open("xb") as log:
@@ -176,8 +180,11 @@ def anonymous_pull(candidate: dict, output: Path) -> dict:
     inspected = json.loads(
         subprocess.check_output(["docker", "image", "inspect", image])
     )[0]
-    if inspected["Architecture"] != "amd64" or inspected["Os"] != "linux":
-        raise ValueError("candidate must resolve to linux/amd64")
+    if (
+        inspected["Architecture"] != execution_platform.split("/")[1]
+        or inspected["Os"] != "linux"
+    ):
+        raise ValueError("candidate must resolve to " + execution_platform)
     required = {
         "qfbench2.interface_version": "2.0",
         "qfbench2.track": "simulation",
@@ -187,7 +194,7 @@ def anonymous_pull(candidate: dict, output: Path) -> dict:
         raise ValueError("incorrect interface labels")
     return {
         "image": image,
-        "platform": "linux/amd64",
+        "platform": execution_platform,
         "labels": required,
         "anonymous_pull": True,
     }
@@ -204,14 +211,16 @@ def delivery_identity() -> dict:
     }
 
 
-def verify_delivery(candidate: dict, output: Path) -> dict:
+def verify_delivery(
+    candidate: dict, output: Path, execution_platform: str = "linux/amd64"
+) -> dict:
     """Execute both verbs offline; this limited check is never a G2 report."""
     from dataclasses import asdict
     from throughput.run_unit import run_once, is_batch_unit
 
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    evidence = anonymous_pull(candidate, output)
+    evidence = anonymous_pull(candidate, output, execution_platform)
     evidence.update(
         profile="developer",
         rankable=False,
@@ -238,7 +247,11 @@ def verify_delivery(candidate: dict, output: Path) -> dict:
     return evidence
 
 
-def validate_delivery(evidence: dict, image: str) -> None:
+def validate_delivery(
+    evidence: dict, image: str, execution_platform: str = "linux/amd64"
+) -> None:
+    if execution_platform not in {"linux/amd64", "linux/arm64"}:
+        raise ValueError("unsupported execution platform")
     if (
         evidence.get("image") != image
         or evidence.get("status") != "passed"
@@ -247,7 +260,7 @@ def validate_delivery(evidence: dict, image: str) -> None:
         or evidence.get("profile") != "developer"
         or evidence.get("rankable") is not False
         or evidence.get("anonymous_pull") is not True
-        or evidence.get("platform") != "linux/amd64"
+        or evidence.get("platform") != execution_platform
     ):
         raise ValueError("delivery verification must pass for the exact candidate")
     runs = evidence.get("runs", {})
@@ -296,14 +309,18 @@ def validate_package(candidate: dict, archive: Path, key: str) -> dict:
 
 
 def package(
-    candidate: dict, evidence: dict, output: Path, key_file: Path | None = None
+    candidate: dict,
+    evidence: dict,
+    output: Path,
+    key_file: Path | None = None,
+    execution_platform: str = "linux/amd64",
 ) -> dict:
     from qfbench2_common.team_claim import pack_submission
 
     pending = blockers(candidate, key_file)
     if pending:
         raise ValueError("Submission blocked: " + "; ".join(pending))
-    validate_delivery(evidence, candidate_image(candidate))
+    validate_delivery(evidence, candidate_image(candidate), execution_platform)
     key = read_key(key_file)
     body = descriptor(candidate, key)
     output = output.resolve()
@@ -312,7 +329,7 @@ def package(
     # a previously reviewed archive cannot be overwritten, including via a symlink.
     with tempfile.TemporaryDirectory(prefix="t3-pack-", dir=output.parent) as temporary:
         staging = Path(temporary)
-        pull = anonymous_pull(candidate, staging)
+        pull = anonymous_pull(candidate, staging, execution_platform)
         archive = staging / "submission.zip"
         pack_submission(body, candidate["team_number"], key, archive)
         binding = validate_package(candidate, archive, key)
@@ -322,6 +339,9 @@ def package(
         **pull,
         **binding,
         "profile": "developer",
+        "qualification_scope": "local-arm64"
+        if execution_platform == "linux/arm64"
+        else "amd64",
         "rankable": False,
         "scope": "G1",
         "status": "passed",
@@ -341,6 +361,11 @@ def main() -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--verification", type=Path)
     parser.add_argument("--team-key-file", type=Path)
+    parser.add_argument(
+        "--execution-platform",
+        choices=("linux/amd64", "linux/arm64"),
+        default="linux/amd64",
+    )
     args = parser.parse_args()
     try:
         candidate = load_json(args.candidate)
@@ -356,12 +381,21 @@ def main() -> int:
         if args.out is None:
             parser.error("--out is required; verification directories must be new")
         if args.action == "verify-delivery":
-            print(json.dumps(verify_delivery(candidate, args.out), indent=2))
+            print(
+                json.dumps(
+                    verify_delivery(candidate, args.out, args.execution_platform),
+                    indent=2,
+                )
+            )
         else:
             if args.verification is None:
                 parser.error("--verification is required for packaging")
             result = package(
-                candidate, load_json(args.verification), args.out, args.team_key_file
+                candidate,
+                load_json(args.verification),
+                args.out,
+                args.team_key_file,
+                args.execution_platform,
             )
             args.out.with_suffix(".g1.json").write_text(
                 json.dumps(result, indent=2) + "\n"

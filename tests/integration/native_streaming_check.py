@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -37,13 +38,32 @@ def spec_for(scenario):
 class NativeStreamingTests(unittest.TestCase):
     def compare(self, scenario, chunk_rows):
         spec = spec_for(scenario)
+        started = time.perf_counter()
         original = run_native_sim(deepcopy(spec))
+        buffered_seconds = time.perf_counter() - started
         with tempfile.TemporaryDirectory() as directory:
             paths = [
                 Path(directory) / name
                 for name in ("trace.parquet", "message_trace.parquet")
             ]
+            started = time.perf_counter()
             results = stream_native(deepcopy(spec), paths, chunk_rows=chunk_rows)
+            if original[0].num_rows > 1_000_000:
+                print(
+                    json.dumps(
+                        {
+                            "rankable": False,
+                            "diagnostic": True,
+                            "horizon_ns": scenario["horizon_ns"],
+                            "buffered_kernel_and_conversion_sec": buffered_seconds,
+                            "streaming_two_pass_and_write_sec": time.perf_counter()
+                            - started,
+                            "rows": [t.num_rows for t in results],
+                            "files": {p.name: p.stat().st_size for p in paths},
+                        }
+                    ),
+                    flush=True,
+                )
             hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in paths]
             for expected, result, path in zip(original, results, paths):
                 actual = pq.read_table(path)
@@ -102,8 +122,8 @@ class NativeStreamingTests(unittest.TestCase):
         scenario = json.loads(
             (ROOT / "units/t3-EXAMPLE-vectorized-matching/scenario.json").read_text()
         )
-        scenario["horizon_ns"] = 20_000_000
-        self.compare(scenario, 4096)
+        scenario["horizon_ns"] = 1_000_000_000
+        self.compare(scenario, 262144)
 
     def test_replay_count_mismatch_is_an_error(self):
         scenario = json.loads(

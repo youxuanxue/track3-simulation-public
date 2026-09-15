@@ -215,12 +215,12 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     if "@sha256:" not in image:
         raise ValueError("candidate must use a registry digest")
     plan = json.loads(plan_path.read_text())
-    target = bench.execution_platform(plan)
+    execution_target = bench.execution_platform(plan)
     for selected in {image, plan["reference_image"]}:
         inspected = json.loads(
             subprocess.check_output(["docker", "image", "inspect", selected])
         )[0]
-        if inspected["Os"] + "/" + inspected["Architecture"] != target:
+        if inspected["Os"] + "/" + inspected["Architecture"] != execution_target:
             raise ValueError("heldout image architecture differs from plan")
     validator = validation_identity()
     if plan["sha256"] != bench.digest({k: v for k, v in plan.items() if k != "sha256"}):
@@ -281,7 +281,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
                     "docker",
                     "run",
                     "--rm",
-                    f"--platform={target}",
+                    f"--platform={execution_target}",
                     "--network=none",
                     "--cpus=4",
                     "--memory=16g",
@@ -334,7 +334,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
         "docker",
         "run",
         "--rm",
-        f"--platform={target}",
+        f"--platform={execution_target}",
         "--network=none",
         "--cpus=4",
         "--memory=16g",
@@ -353,7 +353,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     (fallback_dir / "stderr.log").write_bytes(proc.stderr)
     result = {
         "kind": "heldout-result",
-        "execution_platform": target,
+        "execution_platform": execution_target,
         "profile": "developer",
         "rankable": False,
         "image": image,

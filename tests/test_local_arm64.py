@@ -161,3 +161,42 @@ def test_holdout_platform_is_frozen_and_cannot_be_relabelled(tmp_path):
         parameters.validate(result, "candidate")
     with pytest.raises(ValueError, match="incomplete heldout"):
         parameters.validate(result, "candidate", "linux/arm64")
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_holdout_mount_path_cannot_overwrite_docker_platform(
+    tmp_path, monkeypatch, batch
+):
+    import subprocess
+    import validate_candidate_parameters as parameters
+    from throughput import timer
+
+    plan_dir = tmp_path / "holdouts"
+    plan = parameters.generate(
+        plan_dir, 3456, "reference@sha256:" + "a" * 64, "linux/arm64"
+    )
+    plan["cases"] = [next(case for case in plan["cases"] if case["batch"] is batch)]
+    plan["sha256"] = bench.digest({k: v for k, v in plan.items() if k != "sha256"})
+    (plan_dir / "holdout.json").write_text(json.dumps(plan))
+    monkeypatch.setattr(parameters, "validation_identity", lambda: {})
+    monkeypatch.setattr(bench, "identity", lambda: {})
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *a, **kw: b'[{"Os":"linux","Architecture":"arm64"}]',
+    )
+    commands = []
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 1, b"", b"fixture launch failure")
+
+    monkeypatch.setattr(timer, "bounded_container_run", launch)
+    result = parameters.run(
+        plan_dir / "holdout.json", "candidate@sha256:" + "b" * 64, tmp_path / "runs", 10
+    )
+    assert result["status"] == "failed"
+    assert len(commands) == 2  # Candidate plus independent fallback probe.
+    assert all("--platform=linux/arm64" in command for command in commands)
+    target = "/input/scenarios" if batch else "/input/scenario.json"
+    assert target in commands[0]

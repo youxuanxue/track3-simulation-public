@@ -138,17 +138,14 @@ def repeat_units() -> list[Path]:
 
 def repeat_artifacts(unit: Path) -> set[str]:
     from qfbench2_track_simulation.batch import load_subs
+    from qfbench2_track_simulation.scoring import _CardPolicy
 
-    prefixes = (
-        [entry["sub"] + "/" for entry in load_subs(unit)]
-        if (unit / "batch.json").exists()
-        else [""]
-    )
-    return {
-        prefix + name
-        for prefix in prefixes
-        for name in ("trace.parquet", "message_trace.parquet")
-    }
+    batch = (unit / "batch.json").exists()
+    prefixes = [entry["sub"] + "/" for entry in load_subs(unit)] if batch else [""]
+    names = ["trace.parquet"]
+    if batch or _CardPolicy(unit).requires_message_ledger:
+        names.append("message_trace.parquet")
+    return {prefix + name for prefix in prefixes for name in names}
 
 
 def anonymous_pull(candidate: dict, output: Path) -> dict:

@@ -11,6 +11,46 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import validate_candidate_parameters as parameters  # noqa: E402
 
 
+def test_optional_ledger_differential_still_checks_exact_trace(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    candidate, reference = tmp_path / "candidate", tmp_path / "reference"
+    candidate.mkdir()
+    reference.mkdir()
+    table = pa.table(
+        {
+            "t_ns": [1, 2],
+            "agent_id": [1, 1],
+            "msg_type": ["ORDER_FILLED", "ORDER_FILLED"],
+            "side": ["BUY", "SELL"],
+            "price": [100, 100],
+            "size": [1, 1],
+            "order_id": [1, 2],
+        }
+    )
+    for root in (candidate, reference):
+        pq.write_table(table, root / "trace.parquet")
+    result = parameters.compare(candidate, reference, require_ledger=False)
+    assert result["passed"] and result["ledger_checked"] is False
+    with pytest.raises(FileNotFoundError):
+        parameters.compare(candidate, reference, require_ledger=True)
+    changed = table.set_column(4, "price", pa.array([100, 101]))
+    pq.write_table(changed, candidate / "trace.parquet")
+    assert (
+        parameters.compare(candidate, reference, require_ledger=False)["passed"]
+        is False
+    )
+    # An emitted optional ledger is still checked; malformed output isn't ignored.
+    pq.write_table(table, candidate / "trace.parquet")
+    pq.write_table(pa.table({"bad_column": [1]}), candidate / "message_trace.parquet")
+    pq.write_table(pa.table({"bad_column": [1]}), reference / "message_trace.parquet")
+    assert (
+        parameters.compare(candidate, reference, require_ledger=False)["passed"]
+        is False
+    )
+
+
 def test_holdouts_cover_families_and_all_batch_sources(tmp_path):
     result = parameters.generate(
         tmp_path / "heldout", 990000, "fixture@sha256:" + "a" * 64

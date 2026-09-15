@@ -615,9 +615,13 @@ def assess(evidence_path: Path) -> dict:
                 expected_files = preparation.repeat_artifacts(
                     ROOT / "units" / unit["unit"]
                 )
+                from qfbench2_track_simulation.limits import stable_paths_for
+
+                allowed_files = set(stable_paths_for(ROOT / "units" / unit["unit"]))
                 gates = r["verification"]["gates"]
                 if (
-                    set(hashes) != expected_files
+                    not expected_files.issubset(hashes)
+                    or not set(hashes).issubset(allowed_files)
                     or hashes != r["parquet_sha256"]
                     or len(gates) != 4
                     or not all(g["passed"] for g in gates.values())

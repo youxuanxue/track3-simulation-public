@@ -15,6 +15,19 @@ class StoredTable:
     num_rows: int
 
 
+class UnstoredLedger:
+    """Count actual kernel messages without persisting an optional ledger."""
+
+    def __init__(self):
+        self.num_rows = 0
+
+    def write(self, table: pa.Table) -> None:
+        self.num_rows += table.num_rows
+
+    def close(self):
+        return self
+
+
 class ParquetSink:
     """Write independent row groups; never collect all simulation rows in RAM."""
 

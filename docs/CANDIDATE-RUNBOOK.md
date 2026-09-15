@@ -123,6 +123,25 @@ integer columns and nullable pandas metadata. Output buffers are bounded; the fi
 files must still fit the card's disk cap. This implementation alone does not prove
 that the unchanged full exemplar fits that cap.
 
+Single-scenario `throughput-scale` inputs omit the optional message ledger by
+default. The complete transaction trace and actual kernel message count are
+unchanged. Batch execution always emits its required per-subscenario ledgers,
+including throughput batches; unknown single-scenario families also retain them.
+`simulate --require-message-ledger` forces the throughput ledger for diagnostics.
+The participant sees scenario JSON, not the organizer card. Consequently, an
+organizer override requiring a throughput ledger must also be communicated through
+the launch interface; the candidate cannot discover a hidden card override.
+Local acceptance continues to use the scorer's card policy, so a missing required
+ledger fails. Optional ledgers, when emitted, remain covered by repeat hashes and
+parameter comparisons. Neither message delivery nor transaction rows are skipped.
+
+The default shared sanitation limits used by the local retention call are a
+separate bound from the 10 GiB scratch filesystem. At toolkit 2.4.1 they limit a
+file to 64 MiB and the tree to 256 MiB. These are library defaults, not a verified
+statement of the production Runner's deployed limits. An output refused by
+retention cannot qualify; removing an optional ledger alone does not resolve a
+transaction trace that exceeds these bounds.
+
 Dispatch Track 3 CI with `build_native=true` to compile both extensions, run the bounded
 streaming differential suite inside the image and export the tested modules with
 source and file hashes. Assemble them on the pinned runtime and publish with an

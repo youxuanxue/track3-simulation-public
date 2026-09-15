@@ -125,6 +125,75 @@ class NativeStreamingTests(unittest.TestCase):
         scenario["horizon_ns"] = 1_000_000_000
         self.compare(scenario, 262144)
 
+    def test_optional_ledger_preserves_exact_trace_and_message_count(self):
+        from fast_sim.simulate import simulate
+        from fast_sim.simulate_batch import _run_one
+
+        scenario = json.loads(
+            (ROOT / "units/t3-EXAMPLE-vectorized-matching/scenario.json").read_text()
+        )
+        # Exercise streaming directly; a one-second prefix uses buffered CLI storage.
+        scenario["horizon_ns"] = 1_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "scenario.json"
+            config.write_text(json.dumps(scenario))
+            full = stream_native(
+                spec_for(scenario),
+                (root / "full/trace.parquet", root / "full/message_trace.parquet"),
+            )
+            lean = stream_native(
+                spec_for(scenario), (root / "lean/trace.parquet", None)
+            )
+            full_hash = hashlib.sha256(
+                (root / "full/trace.parquet").read_bytes()
+            ).hexdigest()
+            lean_hash = hashlib.sha256(
+                (root / "lean/trace.parquet").read_bytes()
+            ).hexdigest()
+            self.assertEqual(lean_hash, full_hash)
+            self.assertEqual([t.num_rows for t in lean], [t.num_rows for t in full])
+            self.assertFalse((root / "lean/message_trace.parquet").exists())
+            print(
+                json.dumps(
+                    {
+                        "rankable": False,
+                        "diagnostic": True,
+                        "storage_mode": "streamed",
+                        "optional_ledger": {
+                            "full_bytes": sum(
+                                p.stat().st_size
+                                for p in (root / "full").glob("*.parquet")
+                            ),
+                            "lean_bytes": (root / "lean/trace.parquet").stat().st_size,
+                            "n_events": lean[0].num_rows,
+                            "n_messages": lean[1].num_rows,
+                            "trace_sha256": lean_hash,
+                        },
+                    }
+                ),
+                flush=True,
+            )
+            scenario["horizon_ns"] = 10_000_000
+            config.write_text(json.dumps(scenario))
+            full_events = simulate(
+                config, root / "cli-full/trace.parquet", require_message_ledger=True
+            )
+            lean_events = simulate(config, root / "cli-lean/trace.parquet")
+            for key in ("trace_sha256", "n_events", "n_messages"):
+                self.assertEqual(full_events[key], lean_events[key])
+            self.assertNotIn("message_trace_sha256", lean_events)
+            self.assertFalse((root / "cli-lean/message_trace.parquet").exists())
+            _run_one((str(config), str(root / "batch/trace.parquet")))
+            self.assertGreater(
+                pq.ParquetFile(root / "batch/message_trace.parquet").metadata.num_rows,
+                0,
+            )
+            scenario["scenario_family"] = "unknown-family"
+            config.write_text(json.dumps(scenario))
+            simulate(config, root / "unknown/trace.parquet")
+            self.assertTrue((root / "unknown/message_trace.parquet").exists())
+
     def test_replay_count_mismatch_is_an_error(self):
         scenario = json.loads(
             (ROOT / "units/t3-s001-price-time-priority/scenario.json").read_text()
@@ -139,6 +208,50 @@ class NativeStreamingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "classification pass"):
             stream_native_sim(deepcopy(spec), partial, count + 1, Sink(), Sink())
+
+    def test_optional_ledger_streaming_cli(self):
+        from fast_sim.simulate import simulate
+
+        scenario = json.loads(
+            (ROOT / "units/t3-EXAMPLE-vectorized-matching/scenario.json").read_text()
+        )
+        # This prefix crosses the one-million estimated-placement dispatch threshold.
+        scenario["horizon_ns"] = 3_000_000_000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "scenario.json"
+            config.write_text(json.dumps(scenario))
+            full = simulate(
+                config, root / "full/trace.parquet", require_message_ledger=True
+            )
+            lean = simulate(config, root / "lean/trace.parquet")
+            for key in ("trace_sha256", "n_events", "n_messages"):
+                self.assertEqual(full[key], lean[key])
+            self.assertFalse((root / "lean/message_trace.parquet").exists())
+            # Multiple row groups confirm that the CLI used bounded streaming.
+            self.assertGreater(
+                pq.ParquetFile(root / "lean/trace.parquet").num_row_groups, 2
+            )
+            print(
+                json.dumps(
+                    {
+                        "rankable": False,
+                        "diagnostic": True,
+                        "horizon_ns": scenario["horizon_ns"],
+                        "cli_optional_ledger": {
+                            "full_bytes": sum(
+                                p.stat().st_size
+                                for p in (root / "full").glob("*.parquet")
+                            ),
+                            "lean_bytes": (root / "lean/trace.parquet").stat().st_size,
+                            "n_events": lean["n_events"],
+                            "n_messages": lean["n_messages"],
+                            "trace_sha256": lean["trace_sha256"],
+                        },
+                    }
+                ),
+                flush=True,
+            )
 
     def test_resource_failure_does_not_start_hybrid(self):
         from fast_sim.engine import run_scenario

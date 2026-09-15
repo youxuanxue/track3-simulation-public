@@ -153,3 +153,25 @@ def test_wrong_event_count_refused(candidate, delivery):
     delivery["runs"]["simulate"]["reported_n_events"] = 100000000
     with pytest.raises(ValueError, match="cross-check counts"):
         module.validate_delivery(delivery, module.candidate_image(candidate))
+
+
+def test_repeat_artifacts_follow_card_ledger_policy(tmp_path):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import prepare_submission as preparation
+
+    unit = tmp_path / "unit"
+    unit.mkdir()
+    card = unit / "card.toml"
+    for declared, required in (("false", False), ("true", True)):
+        card.write_text(
+            '[task]\nscenario_family = "throughput-scale"\n[scoring.params]\nrequires_message_ledger = '
+            + declared
+            + "\n"
+        )
+        assert preparation.repeat_artifacts(unit) == (
+            {"trace.parquet", "message_trace.parquet"}
+            if required
+            else {"trace.parquet"}
+        )

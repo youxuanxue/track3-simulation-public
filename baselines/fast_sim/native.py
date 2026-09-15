@@ -283,12 +283,15 @@ def stream_native(spec, output_paths, chunk_rows=262144):
     from fast_sim._native import (
         CTrace, CLedger, classify_native_executions, stream_native_sim,
     )
-    from fast_sim.streaming import ParquetSink
+    from fast_sim.streaming import ParquetSink, UnstoredLedger
 
     partial, executions = classify_native_executions(deepcopy(spec))
     trace = ParquetSink(output_paths[0], CTrace().to_arrow())
     try:
-        ledger = ParquetSink(output_paths[1], CLedger().to_arrow())
+        ledger = (
+            ParquetSink(output_paths[1], CLedger().to_arrow())
+            if output_paths[1] is not None else UnstoredLedger()
+        )
         try:
             stream_native_sim(spec, partial, executions, trace, ledger, chunk_rows)
         finally:

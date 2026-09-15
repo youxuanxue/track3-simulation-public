@@ -579,6 +579,37 @@ def test_stale_code_rejects_complete_evidence(full_evidence, monkeypatch):
         bench.assess(full_evidence[0])
 
 
+@pytest.mark.parametrize("required", [False, True])
+def test_full_roster_allows_only_policy_optional_missing_ledgers(
+    full_evidence, monkeypatch, required
+):
+    evidence_path, _ = full_evidence
+    evidence = json.loads(evidence_path.read_text())
+    monkeypatch.setattr(
+        bench.preparation,
+        "repeat_artifacts",
+        lambda _: {"trace.parquet", "message_trace.parquet"}
+        if required
+        else {"trace.parquet"},
+    )
+    for entry in evidence["runs"]:
+        raw = bench.read_index(entry)
+        ledger = Path(raw["output_dir"]) / "message_trace.parquet"
+        ledger.unlink(missing_ok=True)
+        raw["parquet_sha256"].pop("message_trace.parquet")
+        raw["artifacts"] = [
+            a
+            for a in raw["artifacts"]
+            if Path(a["path"]).name != "message_trace.parquet"
+        ]
+        path = Path(entry["path"])
+        path.write_text(json.dumps(raw))
+        entry["sha256"] = bench.file_digest(path)
+    evidence_path.write_text(json.dumps(evidence))
+    result = bench.assess(evidence_path)
+    assert (result["G2"] == "pass") is (not required)
+
+
 def test_rollback_requires_qualified_prior_candidate(state, monkeypatch, tmp_path):
     directory, g1s = state
     monkeypatch.setattr(bench, "assess", lambda _: decision())

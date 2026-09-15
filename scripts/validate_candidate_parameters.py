@@ -151,7 +151,7 @@ def generate(output: Path, seed: int, reference_image: str) -> dict:
     return plan
 
 
-def compare(candidate: Path, reference: Path) -> dict:
+def compare(candidate: Path, reference: Path, *, require_ledger: bool = True) -> dict:
     import pandas as pd
     from qfbench2_track_simulation.semantics import (
         check_tier_a,
@@ -161,16 +161,24 @@ def compare(candidate: Path, reference: Path) -> dict:
 
     c = pd.read_parquet(candidate / "trace.parquet")
     r = pd.read_parquet(reference / "trace.parquet")
-    cm = pd.read_parquet(candidate / "message_trace.parquet")
-    rm = pd.read_parquet(reference / "message_trace.parquet")
     checks = [
         check_tier_a(c, r, timestamp_tolerance_ns=0, kendall_tau_floor=0.999),
-        check_message_semantics(cm),
-        check_message_reference(cm, rm),
     ]
+    pairs = [("trace", c, r)]
+    # Omission is an organizer-policy choice, never inferred from a missing file.
+    # If the candidate emits an optional ledger, validate it in full as usual.
+    ledger_checked = require_ledger or (candidate / "message_trace.parquet").exists()
+    if ledger_checked:
+        cm = pd.read_parquet(candidate / "message_trace.parquet")
+        rm = pd.read_parquet(reference / "message_trace.parquet")
+        message_check = check_message_semantics(cm)
+        checks.append(message_check)
+        if message_check[0]:
+            checks.append(check_message_reference(cm, rm))
+        pairs.append(("ledger", cm, rm))
     # Exact values/order in addition to the published admissibility checks. Allow
     # equivalent nullable integer representation, never round nanosecond timestamps.
-    for name, left, right in (("trace", c, r), ("ledger", cm, rm)):
+    for name, left, right in pairs:
         try:
             pd.testing.assert_frame_equal(
                 left, right, check_dtype=False, check_exact=True
@@ -180,8 +188,18 @@ def compare(candidate: Path, reference: Path) -> dict:
             checks.append((False, [name + ": " + str(exc)[:1500]]))
     return {
         "passed": all(ok for ok, _ in checks),
+        "ledger_checked": ledger_checked,
         "checks": [{"passed": ok, "breaches": breaches} for ok, breaches in checks],
     }
+
+
+def case_requires_ledger(case: dict) -> bool:
+    from qfbench2_track_simulation.scoring import _CardPolicy
+
+    return (
+        case["batch"]
+        or _CardPolicy(ROOT / "units" / case["source_unit"]).requires_message_ledger
+    )
 
 
 def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
@@ -275,7 +293,9 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
             )
             record["comparisons"] = {
                 prefix: compare(
-                    case_output / "candidate" / prefix, case_output / "abides" / prefix
+                    case_output / "candidate" / prefix,
+                    case_output / "abides" / prefix,
+                    require_ledger=case_requires_ledger(case),
                 )
                 for prefix in prefixes
             }
@@ -392,6 +412,7 @@ def validate(result: dict, image: str) -> None:
             for arm in ("candidate", "abides")
             for prefix in prefixes
             for name in ("trace.parquet", "message_trace.parquet")
+            if arm == "abides" or name == "trace.parquet" or case_requires_ledger(case)
         } | {
             str(case_output / (arm + suffix))
             for arm in ("candidate", "abides")

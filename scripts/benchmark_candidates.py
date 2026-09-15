@@ -210,6 +210,9 @@ def freeze(args: argparse.Namespace) -> dict:
         "budget_sec": args.budget,
         "stop_conditions": [
             "deadline",
+            "host-drift",
+            "host-unavailable",
+            "unit-failed",
             "three-consecutive-same-failures",
             "completed-once",
         ],
@@ -306,8 +309,6 @@ def run_plan(
 
     plan = json.loads(plan_path.read_text())
     validate_plan(plan, current=True)
-    if host() != plan["host"]:
-        raise ValueError("host drift")
     if not diagnostic:
         require_native_host(plan["host"])
     output = output.resolve()
@@ -323,6 +324,7 @@ def run_plan(
     entries = []
     started = time.monotonic()
     stop_reason = "completed-once"
+    stop_error = None
     for group in range(-1, plan["repeats"]):
         for unit in execution_roster(plan):
             arms = list(plan["images"])
@@ -332,7 +334,13 @@ def run_plan(
                 if time.monotonic() - started >= plan["budget_sec"]:
                     stop_reason = "deadline"
                     break
-                if host() != plan["host"]:
+                try:
+                    measured_host = host()
+                except Exception as exc:
+                    stop_reason = "host-unavailable"
+                    stop_error = {"kind": type(exc).__name__, "message": str(exc)}
+                    break
+                if measured_host != plan["host"]:
                     stop_reason = "host-drift"
                     break
                 run_root = (
@@ -451,6 +459,12 @@ def run_plan(
                 if consecutive >= 3:
                     stop_reason = "three-consecutive-same-failures"
                     break
+                if failure:
+                    # A failed required invocation already disqualifies this plan.
+                    # In particular, a timed-out Docker client does not prove its
+                    # container stopped; never launch another unit after failure.
+                    stop_reason = "unit-failed"
+                    break
             if stop_reason != "completed-once":
                 break
         if stop_reason != "completed-once":
@@ -461,6 +475,7 @@ def run_plan(
         "plan": index(output / "plan.json"),
         "runs": entries,
         "stop_reason": stop_reason,
+        "stop_error": stop_error,
         "diagnostic": diagnostic,
         "finished_at": now(),
     }

@@ -150,15 +150,19 @@ def test_failed_container_preserves_measurement_and_safe_evidence(
         assert (retained / "trace.parquet").read_bytes() == b"partial parquet bytes"
 
 
-def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("purpose", ["baseline", "screen", "confirmation"])
+def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys, purpose):
     from throughput import run_unit as runner
 
     frozen = {
-        "purpose": "baseline",
+        "purpose": purpose,
         "host": {},
-        "repeats": 0,
+        "repeats": 1,
         "roster": [{"unit": "fixture", "batch": False, "input_sha256": "input"}],
-        "images": {"A": "image"},
+        "screen_units": ["fixture"],
+        "images": {"A": "baseline", "B": "image"}
+        if purpose == "confirmation"
+        else {"A": "image"},
         "budget_sec": 60,
         "timeout_sec": 30,
         "plan_sha256": "fixture",
@@ -180,6 +184,9 @@ def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(runner, "run_once", failed_run)
     evidence = bench.run_plan(plan_path, tmp_path / "run", diagnostic=True)
+    assert evidence["stop_reason"] == "unit-failed"
+    assert len(evidence["runs"]) == 1  # No retry or next arm after a failed warmup.
+    assert json.loads((tmp_path / "run/evidence.json").read_text()) == evidence
     raw = bench.read_index(evidence["runs"][0])
     assert raw["status"] == "failed" and raw["rankable"] is False
     assert raw["measurement"]["returncode"] == 137
@@ -191,6 +198,54 @@ def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys):
     assert progress[-1]["measurement"]["returncode"] == 137
     assert raw["artifacts"] == [bench.index(Path(raw["output_dir"]) / "trace.parquet")]
     assert raw["logs"][0]["sha256"] == bench.file_digest(Path(raw["logs"][0]["path"]))
+
+
+@pytest.mark.parametrize("after_one_run", [False, True])
+def test_host_timeout_retains_completed_records(tmp_path, monkeypatch, after_one_run):
+    from throughput import run_unit as runner
+    import subprocess
+
+    frozen = {
+        "purpose": "baseline",
+        "host": {},
+        "repeats": 1,
+        "roster": [{"unit": "fixture", "batch": False, "input_sha256": "input"}],
+        "images": {"A": "image"},
+        "budget_sec": 60,
+        "timeout_sec": 30,
+        "plan_sha256": "fixture",
+        "history_dir": str(tmp_path / "history"),
+    }
+    plan_path = tmp_path / "plan.json"
+    bench.save(plan_path, frozen)
+    monkeypatch.setattr(bench, "validate_plan", lambda *a, **kw: None)
+    calls = []
+
+    def failing_host():
+        if after_one_run and not calls:
+            return {}
+        raise subprocess.TimeoutExpired(["docker", "info"], 30)
+
+    def successful_run(*args, **kwargs):
+        calls.append(args)
+        kwargs["keep_output"].mkdir()
+        (kwargs["log_dir"] / "stdout.log").write_bytes(b"completed")
+        return runner.UnitRun(10, 10, 10, 1, None, 123456, 0)
+
+    monkeypatch.setattr(bench, "host", failing_host)
+    monkeypatch.setattr(runner, "run_once", successful_run)
+    monkeypatch.setattr(bench, "gate_output", lambda *a: {"admissible": True})
+    evidence = bench.run_plan(plan_path, tmp_path / "run", diagnostic=True)
+    assert evidence["stop_reason"] == "host-unavailable"
+    assert evidence["stop_error"]["kind"] == "TimeoutExpired"
+    assert len(calls) == len(evidence["runs"]) == int(after_one_run)
+    assert json.loads((tmp_path / "run/evidence.json").read_text()) == evidence
+    if after_one_run:
+        raw = bench.read_index(evidence["runs"][0])
+        assert raw["status"] == "passed"
+        assert raw["logs"] == [
+            bench.index(tmp_path / "run/warmup/fixture/A/stdout.log")
+        ]
 
 
 def decision(g2="pass", g3="pass", purpose="confirmation"):

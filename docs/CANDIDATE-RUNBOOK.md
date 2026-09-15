@@ -97,6 +97,10 @@ for the complete protocol. A screen bounds each unit at two minutes and the
 experiment at twenty minutes. Parameter artifacts are uploaded before simulation,
 and each unit's start and final resource record also appear in the workflow log,
 so a terminated worker does not erase all diagnostic evidence.
+Every measurement stops after its first failed required invocation. This also
+prevents another container from starting when a timed-out Docker client cannot
+confirm that the previous container stopped. A failed host query ends the plan
+with the query error and all previously indexed records in `evidence.json`.
 
 ## Paired confirmation and candidate history
 

@@ -14,7 +14,8 @@ checks the packaging and candidate-controller behavior before commits and pushes
 
 `baselines/Dockerfile.candidate` reuses the immutable historical image and checks
 that its compiled Cython sources match the checkout. It supports Python changes;
-a native source change requires rebuilding the extensions with the full Dockerfile.
+a native source change requires rebuilding the extensions with
+`baselines/Dockerfile.native-candidate`, which preserves the fixed numerical runtime.
 The reference image independently invokes the pinned ABIDES engine with all four
 existing patches. Its extra logging dependencies are verified against committed
 wheel hashes before installation.
@@ -22,6 +23,7 @@ wheel hashes before installation.
 ```bash
 python scripts/validate_candidate_parameters.py reference-wheels --out out/reference-wheels
 docker build --platform=linux/amd64 -f baselines/Dockerfile.candidate -t ghcr.io/youxuanxue/track3-simulation-public:candidate .
+docker build --platform=linux/amd64 -f baselines/Dockerfile.native-candidate -t track3-native-candidate .
 docker build --platform=linux/amd64 -f baselines/Dockerfile.parameter-reference -t ghcr.io/youxuanxue/track3-simulation-public:parameter-reference .
 ```
 
@@ -101,6 +103,22 @@ Every measurement stops after its first failed required invocation. This also
 prevents another container from starting when a timed-out Docker client cannot
 confirm that the previous container stopped. A failed host query ends the plan
 with the query error and all previously indexed records in `evidence.json`.
+Native jobs restore unresolved failure records from the latest retained artifact
+on the same branch and execute sequentially. Missing or expired required history
+stops qualification; a new runner cannot silently reset the failure count.
+
+Large native workloads use a classification pass that stores one bit per execution,
+then replay into bounded Parquet row groups. The classification retains only the
+latest execution of orders whose future fills remain unresolved. It preserves the
+original last-execution label even when fill and cancellation messages arrive out
+of order. The second pass writes the complete trace and delivery ledger with exact
+integer columns and nullable pandas metadata. Output buffers are bounded; the final
+files must still fit the card's disk cap. This implementation alone does not prove
+that the unchanged full exemplar fits that cap.
+
+Dispatch Track 3 CI with `build_native=true` to compile both extensions, run the bounded
+streaming differential suite inside the image and publish only after those checks
+pass. It does not run G2/G3 or promote the image.
 
 ## Paired confirmation and candidate history
 

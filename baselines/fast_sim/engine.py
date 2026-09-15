@@ -33,7 +33,7 @@ def reset_abides_counters() -> None:
     setattr(Message, "_Message__message_id_counter", 1)
 
 
-def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
+def run_scenario(scenario: dict[str, Any], output_paths=None) -> tuple[Any, Any, dict[str, Any]]:
     """Execute ``scenario`` and return ``(trace_df, message_trace_df, end_state)``.
 
     The kernel, matching engine, agents, oracle and latency model are the pinned
@@ -56,7 +56,11 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
 
     if should_use_native(agents):
         try:
-            return run_native(config)
+            return run_native(config) if output_paths is None else run_native(config, output_paths)
+        except (OSError, MemoryError):
+            # Resource/storage failures cannot be repaired by rerunning the same
+            # workload through the more memory-intensive hybrid implementation.
+            raise
         except Exception as exc:
             import logging
 

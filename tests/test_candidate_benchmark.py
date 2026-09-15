@@ -599,6 +599,53 @@ def test_problem_count_survives_rounds_but_resets_after_fix(tmp_path):
     assert bench.record_problem(tmp_path, "unit", "semantic") == 1
 
 
+@pytest.mark.parametrize("invalid", [False, True])
+def test_restore_native_history_preserves_unresolved_count(
+    tmp_path, monkeypatch, invalid
+):
+    import io
+    import zipfile
+    import restore_candidate_history as restore
+
+    source = tmp_path / "source"
+    bench.record_problem(source, "exemplar", "UnitExecutionError")
+    bench.record_problem(source, "other", None)
+    bench.record_problem(source, "exemplar", "UnitExecutionError")
+    payload = (source / "problems.jsonl").read_bytes()
+    if invalid:
+        payload = payload.replace(b'"count": 2', b'"count": 1')
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("history/problems.jsonl", payload)
+        z.writestr("../outside", b"must not extract")
+
+    def api(endpoint):
+        if endpoint.endswith("/zip"):
+            return archive.getvalue()
+        if endpoint.endswith("/artifacts"):
+            return json.dumps(
+                {
+                    "artifacts": [
+                        {"id": 20, "name": "native-qualification-2", "expired": False}
+                    ]
+                }
+            ).encode()
+        return json.dumps({"workflow_runs": [{"id": 3}, {"id": 2}]}).encode()
+
+    monkeypatch.setattr(restore, "api", api)
+    target = tmp_path / "restored"
+    if invalid:
+        with pytest.raises(ValueError, match="count disagrees"):
+            restore.restore("owner/repo", "branch", 3, target)
+        assert not target.exists()
+    else:
+        result = restore.restore("owner/repo", "branch", 3, target)
+        assert result["source_run"] == 2
+        assert (target / "problems.jsonl").read_bytes() == payload
+        assert bench.record_problem(target, "exemplar", "UnitExecutionError") == 3
+    assert not (tmp_path / "outside").exists()
+
+
 def test_kernel_reserved_host_memory_is_not_a_container_limit_failure():
     bench.require_native_host(
         {"native": True, "docker_cpus": 4, "docker_memory": 16766418944}

@@ -43,14 +43,15 @@ def simulate(
         scenario = {**scenario, "seed": int(seed)}
 
     t0 = time.perf_counter()
-    trace, message_trace, _end_state = run_scenario(scenario)
+    out_path = pathlib.Path(out_path)
+    msg_out = out_path.parent / "message_trace.parquet"
+    trace, message_trace, _end_state = run_scenario(scenario, (out_path, msg_out))
     wall_clock_sec = time.perf_counter() - t0
     peak_memory_bytes = _peak_rss_bytes()
 
     out_path = pathlib.Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_parquet(trace, out_path)
-    msg_out = out_path.parent / "message_trace.parquet"
     write_parquet(message_trace, msg_out)
 
     n_events = int(trace.num_rows if hasattr(trace, "num_rows") else len(trace))

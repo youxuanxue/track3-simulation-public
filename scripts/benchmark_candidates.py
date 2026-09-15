@@ -86,6 +86,7 @@ def identity() -> dict:
     paths += [
         ROOT / "Dockerfile",
         ROOT / "baselines/Dockerfile.candidate",
+        ROOT / "baselines/Dockerfile.native-candidate",
         ROOT / "simulate",
         ROOT / "simulate-batch",
     ]
@@ -740,6 +741,16 @@ def history_lock(directory: Path):
         yield
 
 
+def next_problem_count(prior: dict | None, failure: str | None) -> int:
+    return (
+        prior["count"] + 1
+        if prior and failure and prior["failure"] == failure
+        else 1
+        if failure
+        else 0
+    )
+
+
 def record_problem(directory: Path, unit: str, failure: str | None) -> int:
     """A different round name cannot reset the same unresolved unit failure."""
     with history_lock(directory):
@@ -750,13 +761,7 @@ def record_problem(directory: Path, unit: str, failure: str | None) -> int:
             else []
         )
         prior = next((r for r in reversed(records) if r["unit"] == unit), None)
-        count = (
-            prior["count"] + 1
-            if prior and failure and prior["failure"] == failure
-            else 1
-            if failure
-            else 0
-        )
+        count = next_problem_count(prior, failure)
         with path.open("a") as f:
             f.write(
                 json.dumps(

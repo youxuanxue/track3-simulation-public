@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       build_native:
-        description: "Rebuild, test and publish the native candidate on the fixed runtime"
+        description: "Rebuild, test and export native modules on the fixed runtime"
         type: boolean
         default: false
       candidate_image:
@@ -217,7 +217,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     env:
       IMAGE: ghcr.io/${{ github.repository }}:native-${{ github.sha }}
     steps:
@@ -228,17 +227,25 @@ jobs:
         run: docker build --platform linux/amd64 -f baselines/Dockerfile.native-candidate -t "$IMAGE" .
       - name: Exact streaming differentials in the candidate image
         run: docker run --rm --network none --cpus 4 --memory 4g -v "$PWD:/workspace:ro" "$IMAGE" python /workspace/tests/integration/native_streaming_check.py
-      - name: Publish tested candidate and retain immutable identity
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Export tested native modules and build identity
         run: |
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          docker push "$IMAGE"
-          docker image inspect "$IMAGE" > native-image.json
+          mkdir -p native-overlay
+          container_id="$(docker create "$IMAGE")"
+          docker cp "$container_id:/opt/fast_sim" native-overlay/fast_sim
+          docker cp "$container_id:/opt/abides_fork" native-overlay/abides_fork
+          docker rm "$container_id"
+          docker image inspect "$IMAGE" > native-overlay/image.json
+          python - <<'PYCODE'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('native-overlay')
+          hashes = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file()}
+          (root/'build.json').write_text(json.dumps({'source_commit': os.environ['GITHUB_SHA'], 'rankable': False, 'files': hashes}, indent=2)+'\n')
+          PYCODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-image-${{ github.run_id }}
-          path: native-image.json
+          path: native-overlay/
 
   native-qualification:
     name: Native candidate qualification (non-rankable)

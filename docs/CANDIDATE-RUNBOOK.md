@@ -117,8 +117,10 @@ files must still fit the card's disk cap. This implementation alone does not pro
 that the unchanged full exemplar fits that cap.
 
 Dispatch Track 3 CI with `build_native=true` to compile both extensions, run the bounded
-streaming differential suite inside the image and publish only after those checks
-pass. It does not run G2/G3 or promote the image.
+streaming differential suite inside the image and export the tested modules with
+source and file hashes. Assemble them on the pinned runtime and publish with an
+existing registry credential; an Actions token may lack write access to an existing
+package. The build job does not run G2/G3 or promote the image.
 
 ## Paired confirmation and candidate history
 

@@ -83,7 +83,7 @@ alone never qualifies disk usage. Missing telemetry blocks G2. Retained outputs
 live outside scratch and need separate disk space.
 
 ```bash
-python scripts/benchmark_candidates.py freeze --image "$IMAGE" --purpose baseline --round B0 --hypothesis 'Qualify the exact CPU baseline' --budget 18000 --holdout out/holdout-index.json --out out/b0-plan.json
+python scripts/benchmark_candidates.py freeze --image "$IMAGE" --purpose baseline --round B0 --hypothesis 'Qualify the exact CPU baseline' --timeout 7200 --budget 18000 --holdout out/holdout-index.json --out out/b0-plan.json
 python scripts/benchmark_candidates.py run --plan out/b0-plan.json --scratch-volume /mnt/t3-scratch --out out/b0
 python scripts/benchmark_candidates.py assess --evidence out/b0/evidence.json
 ```
@@ -96,7 +96,11 @@ no paid runner is configured. Its raw artifacts include failures.
 
 Dispatch defaults to `measurement_purpose=screen`; choose `baseline` explicitly
 for the complete protocol. A screen bounds each unit at two minutes and the
-experiment at twenty minutes. Parameter artifacts are uploaded before simulation,
+experiment at twenty minutes.
+The native baseline job gives the full exemplar a longer per-unit deadline inside
+its total experiment budget. These are local safety bounds recorded in the frozen
+plan, not published official runtime limits.
+Parameter artifacts are uploaded before simulation,
 and each unit's start and final resource record also appear in the workflow log,
 so a terminated worker does not erase all diagnostic evidence.
 Every measurement stops after its first failed required invocation. This also

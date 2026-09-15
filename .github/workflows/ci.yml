@@ -250,6 +250,9 @@ jobs:
   native-qualification:
     name: Native candidate qualification (non-rankable)
     if: github.event_name == 'workflow_dispatch' && inputs.candidate_image != ''
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     concurrency:
       group: t3-native-${{ github.ref }}
@@ -317,7 +320,9 @@ jobs:
             unit_timeout=120
           else
             run_budget=18000
-            unit_timeout=1800
+            # The full exemplar's classification pass can outlast the old 30m
+            # developer deadline. Keep the whole experiment bounded separately.
+            unit_timeout=7200
           fi
           python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose "$MEASUREMENT_PURPOSE" --round "$MEASUREMENT_PURPOSE-native" --hypothesis 'Qualify the repaired exact CPU baseline' --timeout "$unit_timeout" --budget "$run_budget" --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
           python scripts/benchmark_candidates.py run --plan out/native/plan.json --scratch-volume /mnt/t3-scratch --out out/native/runs

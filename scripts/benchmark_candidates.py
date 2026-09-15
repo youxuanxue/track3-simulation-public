@@ -300,6 +300,32 @@ def require_native_host(measured_host: dict) -> None:
         )
 
 
+def confirmation_reservation(plan_path: Path, plan: dict) -> tuple[str, dict]:
+    if plan["purpose"] != "confirmation" or set(plan["images"]) != {"A", "B"}:
+        raise ValueError("reservation requires a paired confirmation plan")
+    image = plan["images"]["B"]
+    if image == plan["images"]["A"]:
+        raise ValueError("confirmation requires two different images")
+    return digest(image) + ".json", {
+        "image": image,
+        "plan": index(plan_path),
+        "plan_sha256": plan["plan_sha256"],
+        "reserved_at": plan["created_at"],
+        "rankable": False,
+    }
+
+
+def export_confirmation(plan_path: Path, output: Path) -> dict:
+    """Persist a reservation artifact before a disposable worker starts timing."""
+    plan = json.loads(plan_path.read_text())
+    validate_plan(plan, current=True)
+    name, reservation = confirmation_reservation(plan_path, plan)
+    if (Path(plan["history_dir"]) / "confirmations" / name).exists():
+        raise ValueError("this candidate already reserved its confirmation experiment")
+    save(output / name, reservation)
+    return reservation
+
+
 def run_plan(
     plan_path: Path,
     output: Path,
@@ -316,12 +342,8 @@ def run_plan(
     output.mkdir(parents=True, exist_ok=False)
     save(output / "plan.json", plan)
     if plan["purpose"] == "confirmation":
-        reserve = (
-            Path(plan["history_dir"])
-            / "confirmations"
-            / (digest(plan["images"]["B"]) + ".json")
-        )
-        save(reserve, {"plan": index(output / "plan.json"), "started_at": now()})
+        name, reservation = confirmation_reservation(plan_path, plan)
+        save(Path(plan["history_dir"]) / "confirmations" / name, reservation)
     entries = []
     started = time.monotonic()
     stop_reason = "completed-once"
@@ -869,7 +891,19 @@ def rollback(directory: Path, target: str, reason: str, expected: str) -> dict:
             raise ValueError(
                 "rollback target is not a usable historical stable candidate"
             )
-        chosen = candidates[-1]
+        # Paired confirmation requalifies both immutable images under the current
+        # controller. Use that fresh evidence for B0 after a B1 source change;
+        # B0's original plan may correctly fail the current-code identity check.
+        qualified = [
+            e
+            for e in events
+            if e.get("decision", {}).get("G1") == "pass"
+            and e["decision"].get("G2") == "pass"
+            and target in e["decision"].get("images", {}).values()
+        ]
+        if not qualified:
+            raise ValueError("rollback target has no complete qualification")
+        chosen = qualified[-1]
         proof = chosen["decision"]["evidence"]
         read_index(proof)
         if assess(Path(proof["path"]))["G2"] != "pass":
@@ -918,6 +952,9 @@ def main() -> int:
     run_p.add_argument("--out", type=Path, required=True)
     run_p.add_argument("--diagnostic", action="store_true")
     run_p.add_argument("--scratch-volume", type=Path)
+    reserve_p = sub.add_parser("export-confirmation")
+    reserve_p.add_argument("--plan", type=Path, required=True)
+    reserve_p.add_argument("--out", type=Path, required=True)
     assess_p = sub.add_parser("assess")
     assess_p.add_argument("--evidence", type=Path, required=True)
     decide_p = sub.add_parser("decide")
@@ -936,6 +973,8 @@ def main() -> int:
             result = freeze(args)
         elif args.action == "run":
             result = run_plan(args.plan, args.out, args.diagnostic, args.scratch_volume)
+        elif args.action == "export-confirmation":
+            result = export_confirmation(args.plan, args.out)
         elif args.action == "assess":
             result = assess(args.evidence)
         elif args.action == "rollback":

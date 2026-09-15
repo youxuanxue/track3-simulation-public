@@ -110,6 +110,9 @@ with the query error and all previously indexed records in `evidence.json`.
 Native jobs restore unresolved failure records from the latest retained artifact
 on the same branch and execute sequentially. Missing or expired required history
 stops qualification; a new runner cannot silently reset the failure count.
+Confirmation reservations are also restored, including early artifacts from jobs
+that stopped before uploading their final measurements. History lookup follows
+pagination; an older confirmation cannot disappear beyond the first result page.
 
 Large native workloads use a classification pass that stores one bit per execution,
 then replay into bounded Parquet row groups. The classification retains only the
@@ -146,6 +149,16 @@ A candidate's confirmation is reserved once in the history directory at launch;
 failed or interrupted confirmation data must be retained, not repeatedly sampled
 until the interval is positive.
 
+The native Actions job accepts `measurement_purpose=confirmation`, `baseline_image`,
+`candidate_image`, `reference_image`, and the predeclared `hypothesis`. Both images
+run the same fresh parameter set and the paired measurement on that job's instance.
+The job exports its candidate-bound reservation and requires its artifact upload
+to succeed before the first measured invocation. A later job restores that record
+and refuses another confirmation for the same candidate, even if the earlier job
+was interrupted. An expired reservation requires recovery; it does not grant a
+new opportunity. The job requires G3 to pass for confirmation success and retains
+the evidence for rejected or inconclusive candidates.
+
 ```bash
 python scripts/benchmark_candidates.py decide --evidence out/b0/evidence.json --g1 out/development.g1.json --history out/candidates
 python scripts/benchmark_candidates.py decide --evidence out/confirmation/evidence.json --g1 out/b0.g1.json --g1 out/b1.g1.json --expected-stable "$B0" --history out/candidates
@@ -157,3 +170,7 @@ image. Missing evidence holds the old candidate; failures reject the challenge;
 only the full gates promote it. Rollback retains the failed version's history and
 requires the earlier candidate's current G2 and intact G1 package. Exemplar semantic
 truth remains `unknown` even when its public checks and complete execution pass.
+Because each complete pair requalifies both images, rollback uses the latest
+qualified evidence containing its target. This allows B0's fresh paired evidence
+to replace its original baseline proof when the controller source has changed;
+the selected evidence still undergoes the full current G2 check.

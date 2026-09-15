@@ -16,14 +16,22 @@ on:
         description: "Immutable candidate image for native qualification (empty runs CI only)"
         type: string
         required: false
+      baseline_image:
+        description: "Qualified immutable B0 image for paired screening or confirmation"
+        type: string
+        required: false
+      hypothesis:
+        description: "Predeclared change being tested against B0"
+        type: string
+        default: "Qualify the repaired exact CPU baseline"
       reference_image:
         description: "Immutable ABIDES reference image for parameter differentials"
         type: string
         required: false
       measurement_purpose:
-        description: "Screen first; baseline requires the complete qualification protocol"
+        description: "Screen first; confirmation requires B0 and a fresh candidate"
         type: choice
-        options: [screen, baseline]
+        options: [screen, baseline, confirmation]
         default: screen
 
 env:
@@ -271,14 +279,29 @@ jobs:
       - name: Record actual instance and pull immutable images
         env:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
+          MEASUREMENT_PURPOSE: ${{ inputs.measurement_purpose }}
           REFERENCE_IMAGE: ${{ inputs.reference_image }}
         run: |
+          if [ "$MEASUREMENT_PURPOSE" = confirmation ] && [ -z "$BASELINE_IMAGE" ]; then
+            echo 'Confirmation requires a qualified baseline image' >&2
+            exit 1
+          fi
+          if [ "$MEASUREMENT_PURPOSE" = baseline ] && [ -n "$BASELINE_IMAGE" ]; then
+            echo 'Baseline qualification accepts one image' >&2
+            exit 1
+          fi
+          if [ "$CANDIDATE_IMAGE" = "$BASELINE_IMAGE" ]; then
+            echo 'Paired experiments require different images' >&2
+            exit 1
+          fi
           mkdir -p out/native
           docker info --format '{{json .}}' > out/native/docker-info.json
           uname -a > out/native/uname.txt
           free -b > out/native/memory.txt
           docker pull "$CANDIDATE_IMAGE"
           docker pull "$REFERENCE_IMAGE"
+          if [ -n "$BASELINE_IMAGE" ]; then docker pull "$BASELINE_IMAGE"; fi
           python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose baseline --round B0-native --hypothesis 'Qualify the repaired exact CPU baseline' --budget 18000 --history out/native/history --out out/native/probe-plan.json
       - name: Restore unresolved failures from the prior native artifact
         env:
@@ -287,10 +310,14 @@ jobs:
       - name: Independent public parameter differentials
         env:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
           REFERENCE_IMAGE: ${{ inputs.reference_image }}
         run: |
           python scripts/validate_candidate_parameters.py generate --seed "$((GITHUB_RUN_ID % 1000000000))" --reference-image "$REFERENCE_IMAGE" --out out/native/holdouts
           python scripts/validate_candidate_parameters.py run --plan out/native/holdouts/holdout.json --image "$CANDIDATE_IMAGE" --out out/native/parameters
+          if [ -n "$BASELINE_IMAGE" ]; then
+            python scripts/validate_candidate_parameters.py run --plan out/native/holdouts/holdout.json --image "$BASELINE_IMAGE" --out out/native/parameters-baseline
+          fi
           python - <<'PYCODE'
           import sys
           from pathlib import Path
@@ -298,9 +325,14 @@ jobs:
           import benchmark_candidates as b
           import validate_candidate_parameters as p
           import json
-          result = json.loads(Path('out/native/parameters/heldout-result.json').read_text())
-          p.validate(result, result['image'])
-          b.save(Path('out/native/holdout-index.json'), {result['image']: b.index(Path('out/native/parameters/heldout-result.json'))})
+          heldouts = {}
+          for folder in ('parameters', 'parameters-baseline'):
+              path = Path('out/native') / folder / 'heldout-result.json'
+              if path.exists():
+                  result = json.loads(path.read_text())
+                  p.validate(result, result['image'])
+                  heldouts[result['image']] = b.index(path)
+          b.save(Path('out/native/holdout-index.json'), heldouts)
           PYCODE
       - name: Preserve parameter evidence before long measurement
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -308,13 +340,13 @@ jobs:
           name: native-parameters-${{ github.run_id }}
           path: out/native/
           retention-days: 30
-      - name: Bounded native measurement with kernel memory telemetry
+      - name: Freeze native experiment and export confirmation reservation
         env:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          BASELINE_IMAGE: ${{ inputs.baseline_image }}
+          HYPOTHESIS: ${{ inputs.hypothesis }}
           MEASUREMENT_PURPOSE: ${{ inputs.measurement_purpose || 'screen' }}
         run: |
-          sudo mkdir -p /mnt/t3-scratch
-          sudo mount -t tmpfs -o size=10G,nodev,nosuid,mode=1777 t3-scratch /mnt/t3-scratch
           if [ "$MEASUREMENT_PURPOSE" = screen ]; then
             run_budget=1200
             unit_timeout=120
@@ -324,14 +356,31 @@ jobs:
             # developer deadline. Keep the whole experiment bounded separately.
             unit_timeout=7200
           fi
-          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose "$MEASUREMENT_PURPOSE" --round "$MEASUREMENT_PURPOSE-native" --hypothesis 'Qualify the repaired exact CPU baseline' --timeout "$unit_timeout" --budget "$run_budget" --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
+          baseline_args=()
+          if [ -n "$BASELINE_IMAGE" ]; then baseline_args=(--baseline "$BASELINE_IMAGE"); fi
+          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" "${baseline_args[@]}" --purpose "$MEASUREMENT_PURPOSE" --round "$MEASUREMENT_PURPOSE-native" --hypothesis "$HYPOTHESIS" --timeout "$unit_timeout" --budget "$run_budget" --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
+          if [ "$MEASUREMENT_PURPOSE" = confirmation ]; then
+            python scripts/benchmark_candidates.py export-confirmation --plan out/native/plan.json --out out/native/reservations
+          fi
+      - name: Preserve confirmation opportunity before any measured invocation
+        if: inputs.measurement_purpose == 'confirmation'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-reservations-${{ github.run_id }}
+          path: out/native/reservations/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Bounded native measurement with kernel memory telemetry
+        run: |
+          sudo mkdir -p /mnt/t3-scratch
+          sudo mount -t tmpfs -o size=10G,nodev,nosuid,mode=1777 t3-scratch /mnt/t3-scratch
           python scripts/benchmark_candidates.py run --plan out/native/plan.json --scratch-volume /mnt/t3-scratch --out out/native/runs
           python scripts/benchmark_candidates.py assess --evidence out/native/runs/evidence.json > out/native/assessment.json
           python - <<'PYCODE'
           import json
           from pathlib import Path
           result = json.loads(Path('out/native/assessment.json').read_text())
-          gate = 'screen_status' if result['purpose'] == 'screen' else 'G2'
+          gate = {'screen': 'screen_status', 'baseline': 'G2', 'confirmation': 'G3'}[result['purpose']]
           assert result[gate] == 'pass', result['reasons']
           PYCODE
       - name: Retain small failure history for the next native job

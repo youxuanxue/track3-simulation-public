@@ -156,6 +156,7 @@ def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys, purpo
 
     frozen = {
         "purpose": purpose,
+        "created_at": "2026-09-15T00:00:00Z",
         "host": {},
         "repeats": 1,
         "roster": [{"unit": "fixture", "batch": False, "input_sha256": "input"}],
@@ -183,7 +184,14 @@ def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys, purpo
         )
 
     monkeypatch.setattr(runner, "run_once", failed_run)
+    if purpose == "confirmation":
+        bench.export_confirmation(plan_path, tmp_path / "early-reservation")
     evidence = bench.run_plan(plan_path, tmp_path / "run", diagnostic=True)
+    if purpose == "confirmation":
+        name = bench.digest(frozen["images"]["B"]) + ".json"
+        assert (tmp_path / "early-reservation" / name).read_bytes() == (
+            tmp_path / "history/confirmations" / name
+        ).read_bytes()
     assert evidence["stop_reason"] == "unit-failed"
     assert len(evidence["runs"]) == 1  # No retry or next arm after a failed warmup.
     assert json.loads((tmp_path / "run/evidence.json").read_text()) == evidence
@@ -599,6 +607,37 @@ def test_problem_count_survives_rounds_but_resets_after_fix(tmp_path):
     assert bench.record_problem(tmp_path, "unit", "semantic") == 1
 
 
+@pytest.mark.parametrize("current_g2", ["pass", "fail"])
+def test_rollback_uses_baseline_requalified_in_latest_pair(
+    state, monkeypatch, tmp_path, current_g2
+):
+    directory, g1s = state
+    paired = decision()
+    paired["evidence"] = {"path": "fresh-pair", "sha256": "fixture"}
+    monkeypatch.setattr(bench, "assess", lambda _: paired.copy())
+    bench.decide(directory, tmp_path / "evidence", g1s, "a")
+    real_read = bench.read_index
+    monkeypatch.setattr(
+        bench, "read_index", lambda e: {} if e["path"] == "fresh-pair" else real_read(e)
+    )
+
+    def current_assessment(path):
+        if str(path) == "fixture":
+            raise ValueError("stale code/toolkit/scorer evidence")
+        assert str(path) == "fresh-pair"
+        return decision(g2=current_g2)
+
+    monkeypatch.setattr(bench, "assess", current_assessment)
+    if current_g2 == "fail":
+        with pytest.raises(ValueError, match="no longer passes"):
+            bench.rollback(directory, "a", "regression", "b")
+        assert bench.history(directory)[-1]["stable"] == "b"
+    else:
+        result = bench.rollback(directory, "a", "regression", "b")
+        assert result["stable"] == "a"
+        assert result["qualification"]["path"] == "fresh-pair"
+
+
 @pytest.mark.parametrize("invalid", [False, True])
 def test_restore_native_history_preserves_unresolved_count(
     tmp_path, monkeypatch, invalid
@@ -622,7 +661,7 @@ def test_restore_native_history_preserves_unresolved_count(
     def api(endpoint):
         if endpoint.endswith("/zip"):
             return archive.getvalue()
-        if endpoint.endswith("/artifacts"):
+        if endpoint.split("?")[0].endswith("/artifacts"):
             return json.dumps(
                 {
                     "artifacts": [
@@ -644,6 +683,115 @@ def test_restore_native_history_preserves_unresolved_count(
         assert (target / "problems.jsonl").read_bytes() == payload
         assert bench.record_problem(target, "exemplar", "UnitExecutionError") == 3
     assert not (tmp_path / "outside").exists()
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_interrupted_confirmation_is_restored_before_retry(
+    tmp_path, monkeypatch, expired
+):
+    import io
+    import zipfile
+    import restore_candidate_history as restore
+
+    image = "registry/candidate@sha256:" + "a" * 64
+    plan = {
+        "purpose": "confirmation",
+        "images": {"A": "registry/base@sha256:" + "b" * 64, "B": image},
+        "created_at": "2026-09-15T00:00:00Z",
+        "plan_sha256": "c" * 64,
+        "history_dir": str(tmp_path / "restored"),
+    }
+    plan_path = tmp_path / "plan.json"
+    bench.save(plan_path, plan)
+    monkeypatch.setattr(bench, "validate_plan", lambda *a, **kw: None)
+    early = tmp_path / "early"
+    reservation = bench.export_confirmation(plan_path, early)
+    name = bench.digest(image) + ".json"
+    payload = (early / name).read_bytes()
+    assert json.loads(payload) == reservation
+    history_source = tmp_path / "history-source"
+    bench.record_problem(history_source, "exemplar", "UnitExecutionError")
+
+    def archive(files):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w") as z:
+            for path, content in files.items():
+                z.writestr(path, content)
+        return data.getvalue()
+
+    archives = {
+        20: archive({name: payload}),  # Run 2 stopped before final/history upload.
+        10: archive(
+            {"problems.jsonl": (history_source / "problems.jsonl").read_bytes()}
+        ),
+    }
+
+    def api(endpoint):
+        route = endpoint.split("?")[0]
+        if route.endswith("/zip"):
+            return archives[int(route.split("/")[-2])]
+        if route.endswith("/artifacts"):
+            run = int(route.split("/")[-2])
+            artifacts = (
+                [{"id": 20, "name": "native-reservations-2", "expired": expired}]
+                if run == 2
+                else [{"id": 10, "name": "native-history-1", "expired": False}]
+            )
+            return json.dumps({"artifacts": artifacts}).encode()
+        return json.dumps({"workflow_runs": [{"id": 3}, {"id": 2}, {"id": 1}]}).encode()
+
+    monkeypatch.setattr(restore, "api", api)
+    target = tmp_path / "restored"
+    if expired:
+        with pytest.raises(ValueError, match="reservations expired"):
+            restore.restore("owner/repo", "branch", 3, target)
+        assert not target.exists()
+        return
+    result = restore.restore("owner/repo", "branch", 3, target)
+    assert (target / "confirmations" / name).read_bytes() == payload
+    assert result["source_run"] == 1
+    assert result["reservation_sources"][0]["source_run"] == 2
+    assert bench.record_problem(target, "exemplar", "UnitExecutionError") == 2
+    with pytest.raises(ValueError, match="already reserved"):
+        bench.export_confirmation(plan_path, tmp_path / "retry-export")
+    assert not (tmp_path / "retry-export").exists()
+    # Calling run directly cannot bypass the restored opportunity guard.
+    with pytest.raises(FileExistsError):
+        bench.run_plan(plan_path, tmp_path / "retry-run", diagnostic=True)
+
+
+def test_native_history_pagination_preserves_older_reservations(monkeypatch):
+    import restore_candidate_history as restore
+
+    endpoints = []
+
+    def api(endpoint):
+        endpoints.append(endpoint)
+        return json.dumps(
+            {
+                "artifacts": [{"id": i} for i in range(100)]
+                if endpoint.endswith("page=1")
+                else [{"id": 100}]
+            }
+        ).encode()
+
+    monkeypatch.setattr(restore, "api", api)
+    assert restore.pages("repos/owner/repo/artifacts", "artifacts")[-1] == {"id": 100}
+    assert len(endpoints) == 2
+
+
+@pytest.mark.parametrize("member", ["../outside.json", "0" * 64 + ".json"])
+def test_confirmation_reservation_rejects_wrong_path_or_identity(member):
+    import io
+    import zipfile
+    import restore_candidate_history as restore
+
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as z:
+        z.writestr(member, json.dumps({"image": "registry/image@sha256:" + "a" * 64}))
+    with zipfile.ZipFile(io.BytesIO(data.getvalue())) as z:
+        with pytest.raises(ValueError, match="invalid confirmation"):
+            restore.read_reservations(z, "")
 
 
 def test_kernel_reserved_host_memory_is_not_a_container_limit_failure():

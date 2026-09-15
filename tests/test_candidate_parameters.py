@@ -56,3 +56,105 @@ def test_seed_and_boundary_variant_does_not_mutate_original():
     assert altered["seed"] == 123456
     assert altered["horizon_ns"] != source["horizon_ns"]
     assert json.dumps(source, sort_keys=True) == before
+
+
+@pytest.fixture
+def bound_evidence(tmp_path):
+    bench = parameters.bench
+    plan_dir = tmp_path / "holdout"
+    plan = parameters.generate(plan_dir, 991000, "reference@sha256:" + "a" * 64)
+    records = []
+    for case in plan["cases"]:
+        case_output = tmp_path / "runs" / case["id"]
+        prefixes = (
+            [Path(e["path"]).stem for e in case["inputs"]] if case["batch"] else [""]
+        )
+        paths = [
+            case_output / arm / prefix / name
+            for arm in ("candidate", "abides")
+            for prefix in prefixes
+            for name in ("trace.parquet", "message_trace.parquet")
+        ] + [
+            case_output / (arm + suffix)
+            for arm in ("candidate", "abides")
+            for suffix in (".stdout.log", ".stderr.log")
+        ]
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture differential artifact")
+        record = {
+            "case": case["id"],
+            "family": case["family"],
+            "batch": case["batch"],
+            "image": "candidate",
+            "reference_image": plan["reference_image"],
+            "plan_sha256": plan["sha256"],
+            "rankable": False,
+            "passed": True,
+            "comparisons": {prefix: {"passed": True} for prefix in prefixes},
+            "artifacts": [bench.index(path) for path in paths],
+        }
+        result_path = case_output / "result.json"
+        bench.save(result_path, record)
+        records.append(bench.index(result_path))
+    logs = []
+    for name in ("stdout.log", "stderr.log"):
+        path = tmp_path / name
+        path.write_bytes(b"fixture fallback log")
+        logs.append(bench.index(path))
+    return {
+        "kind": "heldout-result",
+        "image": "candidate",
+        "rankable": False,
+        "validation_identity": parameters.validation_identity(),
+        "plan": bench.index(plan_dir / "holdout.json"),
+        "records": records,
+        "fallback": {
+            "image": "candidate",
+            "plan_sha256": plan["sha256"],
+            "returncode": 0,
+            "logs": logs,
+        },
+    }
+
+
+def test_complete_bound_differential_evidence_validates(bound_evidence):
+    parameters.validate(bound_evidence, "candidate")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "relabel-image",
+        "other-plan",
+        "wrong-reference",
+        "missing-artifacts",
+        "missing-batch-sub",
+        "fallback-image",
+        "stale-validator",
+    ],
+)
+def test_reused_or_incomplete_differential_evidence_refused(bound_evidence, fault):
+    evidence = bound_evidence
+    if fault == "relabel-image":
+        evidence["image"] = "new-candidate"
+    elif fault == "fallback-image":
+        evidence["fallback"]["image"] = "another-candidate"
+    elif fault == "stale-validator":
+        evidence["validation_identity"] = {}
+    else:
+        entry = evidence["records"][-1 if fault == "missing-batch-sub" else 0]
+        path = Path(entry["path"])
+        record = parameters.bench.read_index(entry)
+        if fault == "other-plan":
+            record["plan_sha256"] = "another-plan"
+        elif fault == "wrong-reference":
+            record["reference_image"] = "another-reference"
+        elif fault == "missing-artifacts":
+            record["artifacts"] = []
+        else:
+            record["comparisons"].pop(next(iter(record["comparisons"])))
+        path.write_text(json.dumps(record))
+        entry.update(parameters.bench.index(path))
+    with pytest.raises(ValueError, match="bound|incomplete|stale"):
+        parameters.validate(evidence, evidence["image"])

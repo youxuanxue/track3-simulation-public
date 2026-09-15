@@ -16,6 +16,11 @@ on:
         description: "Immutable ABIDES reference image for parameter differentials"
         type: string
         required: false
+      measurement_purpose:
+        description: "Screen first; baseline requires the complete qualification protocol"
+        type: choice
+        options: [screen, baseline]
+        default: screen
 
 env:
   # The single place this workflow names a toolkit revision. Both jobs that install
@@ -232,7 +237,7 @@ jobs:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
           REFERENCE_IMAGE: ${{ inputs.reference_image }}
         run: |
-          python scripts/validate_candidate_parameters.py generate --seed 9152400 --reference-image "$REFERENCE_IMAGE" --out out/native/holdouts
+          python scripts/validate_candidate_parameters.py generate --seed "$((GITHUB_RUN_ID % 1000000000))" --reference-image "$REFERENCE_IMAGE" --out out/native/holdouts
           python scripts/validate_candidate_parameters.py run --plan out/native/holdouts/holdout.json --image "$CANDIDATE_IMAGE" --out out/native/parameters
           python - <<'PYCODE'
           import sys
@@ -245,20 +250,35 @@ jobs:
           p.validate(result, result['image'])
           b.save(Path('out/native/holdout-index.json'), {result['image']: b.index(Path('out/native/parameters/heldout-result.json'))})
           PYCODE
-      - name: Full roster with bounded scratch and kernel memory telemetry
+      - name: Preserve parameter evidence before long measurement
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-parameters-${{ github.run_id }}
+          path: out/native/
+          retention-days: 30
+      - name: Bounded native measurement with kernel memory telemetry
         env:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          MEASUREMENT_PURPOSE: ${{ inputs.measurement_purpose || 'screen' }}
         run: |
           sudo mkdir -p /mnt/t3-scratch
           sudo mount -t tmpfs -o size=10G,nodev,nosuid,mode=1777 t3-scratch /mnt/t3-scratch
-          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose baseline --round B0-native --hypothesis 'Qualify the repaired exact CPU baseline' --budget 18000 --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
+          if [ "$MEASUREMENT_PURPOSE" = screen ]; then
+            run_budget=1200
+            unit_timeout=120
+          else
+            run_budget=18000
+            unit_timeout=1800
+          fi
+          python scripts/benchmark_candidates.py freeze --image "$CANDIDATE_IMAGE" --purpose "$MEASUREMENT_PURPOSE" --round "$MEASUREMENT_PURPOSE-native" --hypothesis 'Qualify the repaired exact CPU baseline' --timeout "$unit_timeout" --budget "$run_budget" --history out/native/history --holdout out/native/holdout-index.json --out out/native/plan.json
           python scripts/benchmark_candidates.py run --plan out/native/plan.json --scratch-volume /mnt/t3-scratch --out out/native/runs
           python scripts/benchmark_candidates.py assess --evidence out/native/runs/evidence.json > out/native/assessment.json
           python - <<'PYCODE'
           import json
           from pathlib import Path
           result = json.loads(Path('out/native/assessment.json').read_text())
-          assert result['G2'] == 'pass', result['reasons']
+          gate = 'screen_status' if result['purpose'] == 'screen' else 'G2'
+          assert result[gate] == 'pass', result['reasons']
           PYCODE
       - name: Retain raw qualification evidence including failures
         if: always()

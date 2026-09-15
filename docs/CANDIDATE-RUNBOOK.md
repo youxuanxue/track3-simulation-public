@@ -66,6 +66,10 @@ python scripts/validate_candidate_parameters.py run --plan out/holdouts/holdout.
 Create a JSON mapping from each measured image to the `path` and `sha256` of its
 `heldout-result.json`, using `benchmark_candidates.index`. Supply it as `--holdout`.
 The controller rechecks the raw differential evidence and complete case coverage.
+A case record binds the candidate, reference image and frozen plan; every batch
+subcase and both arms' raw outputs must be present. Validator source, fallback
+probe and numerical library versions must still match. Relabeling an old result
+for a different image or plan cannot qualify a candidate.
 A failed set is regression evidence; implementation changes require a new holdout.
 
 The qualification host must be native Linux/amd64. Use a dedicated scratch
@@ -84,9 +88,15 @@ python scripts/benchmark_candidates.py assess --evidence out/b0/evidence.json
 
 `--diagnostic` permits functional investigation on unsuitable machines, and can
 never qualify G2 or G3. The optional native job in Track 3 CI records the actual
-runner instance, executes independent parameters and then the complete baseline
+runner instance, executes independent parameters and then the selected measurement
 on that same instance. It uses the existing public repository's standard runner;
 no paid runner is configured. Its raw artifacts include failures.
+
+Dispatch defaults to `measurement_purpose=screen`; choose `baseline` explicitly
+for the complete protocol. A screen bounds each unit at two minutes and the
+experiment at twenty minutes. Parameter artifacts are uploaded before simulation,
+and each unit's start and final resource record also appear in the workflow log,
+so a terminated worker does not erase all diagnostic evidence.
 
 ## Paired confirmation and candidate history
 

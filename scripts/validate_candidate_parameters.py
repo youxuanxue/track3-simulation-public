@@ -10,6 +10,7 @@ import argparse
 import copy
 from datetime import datetime, timezone
 from importlib.resources import files
+from importlib.metadata import distribution, version
 import json
 from pathlib import Path
 import subprocess
@@ -19,6 +20,27 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 import benchmark_candidates as bench  # noqa: E402
+
+
+def validation_identity() -> dict:
+    package = distribution("qfbench2-common")
+    return {
+        "sources": {
+            name: bench.file_digest(ROOT / name)
+            for name in (
+                "scripts/validate_candidate_parameters.py",
+                "qfbench2_track_simulation/semantics.py",
+                "throughput/timer.py",
+                "tests/fallback_probe.py",
+                "units/t3-fastlob-core/scenario.json",
+            )
+        },
+        "toolkit_version": package.version,
+        "toolkit_source": json.loads(package.read_text("direct_url.json") or "null"),
+        "numerical_versions": {
+            name: version(name) for name in ("numpy", "pandas", "pyarrow", "scipy")
+        },
+    }
 
 
 def variant(config: dict, seed: int, n: int) -> dict:
@@ -168,6 +190,7 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
     if "@sha256:" not in image:
         raise ValueError("candidate must use a registry digest")
     plan = json.loads(plan_path.read_text())
+    validator = validation_identity()
     if plan["sha256"] != bench.digest({k: v for k, v in plan.items() if k != "sha256"}):
         raise ValueError("heldout plan changed")
     if (
@@ -189,6 +212,8 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
             "family": case["family"],
             "batch": case["batch"],
             "image": image,
+            "reference_image": plan["reference_image"],
+            "plan_sha256": plan["sha256"],
             "rankable": False,
         }
         try:
@@ -300,7 +325,10 @@ def run(plan_path: Path, image: str, output: Path, timeout: float) -> dict:
         "plan": bench.index(plan_path),
         "records": results,
         "identity": bench.identity(),
+        "validation_identity": validator,
         "fallback": {
+            "image": image,
+            "plan_sha256": plan["sha256"],
             "returncode": proc.returncode,
             "logs": [
                 bench.index(fallback_dir / n) for n in ("stdout.log", "stderr.log")
@@ -336,6 +364,49 @@ def validate(result: dict, image: str) -> None:
         records
     ) != len(plan["cases"]):
         raise ValueError("incomplete heldout cases")
+    if result.get("validation_identity") != validation_identity():
+        raise ValueError("stale heldout validator evidence")
+    if plan["fallback_probe_sha256"] != bench.file_digest(
+        ROOT / "tests/fallback_probe.py"
+    ):
+        raise ValueError("fallback probe changed")
+    cases = {case["id"]: case for case in plan["cases"]}
+    for entry, record in zip(result["records"], records, strict=True):
+        case = cases[record["case"]]
+        prefixes = (
+            {Path(e["path"]).stem for e in case["inputs"]} if case["batch"] else {""}
+        )
+        if (
+            record.get("image") != image
+            or record.get("reference_image") != plan["reference_image"]
+            or record.get("plan_sha256") != plan["sha256"]
+            or record.get("rankable") is not False
+            or record.get("family") != case["family"]
+            or record.get("batch") != case["batch"]
+            or set(record.get("comparisons", {})) != prefixes
+        ):
+            raise ValueError("heldout record is not bound to this image/plan/case")
+        case_output = Path(entry["path"]).parent
+        required = {
+            str(case_output / arm / prefix / name)
+            for arm in ("candidate", "abides")
+            for prefix in prefixes
+            for name in ("trace.parquet", "message_trace.parquet")
+        } | {
+            str(case_output / (arm + suffix))
+            for arm in ("candidate", "abides")
+            for suffix in (".stdout.log", ".stderr.log")
+        }
+        if not required.issubset({e["path"] for e in record.get("artifacts", [])}):
+            raise ValueError("heldout raw artifacts incomplete")
+    fallback = result["fallback"]
+    if (
+        fallback.get("image") != image
+        or fallback.get("plan_sha256") != plan["sha256"]
+        or {Path(e["path"]).name for e in fallback.get("logs", [])}
+        != {"stdout.log", "stderr.log"}
+    ):
+        raise ValueError("fallback evidence is not bound to this image/plan")
     families = {u["family"] for u in bench.roster()}
     if (
         any(

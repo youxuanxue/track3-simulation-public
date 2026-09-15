@@ -354,6 +354,11 @@ def run_plan(
                     "arm": arm,
                     "started_at": now(),
                 }
+                print(
+                    json.dumps({"event": "unit-start", **raw}),
+                    file=sys.stderr,
+                    flush=True,
+                )
                 try:
                     result = run_once(
                         raw["image"],
@@ -413,6 +418,28 @@ def run_plan(
                 raw["finished_at"] = now()
                 save(run_root / "record.json", raw)
                 entries.append(index(run_root / "record.json"))
+                print(
+                    json.dumps(
+                        {
+                            "event": "unit-finished",
+                            "record": entries[-1],
+                            **{
+                                key: raw.get(key)
+                                for key in (
+                                    "unit",
+                                    "group",
+                                    "arm",
+                                    "status",
+                                    "measurement",
+                                    "resources",
+                                    "error",
+                                )
+                            },
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
                 failure = (
                     raw.get("error", {}).get("kind", "semantic")
                     if raw["status"] == "failed"

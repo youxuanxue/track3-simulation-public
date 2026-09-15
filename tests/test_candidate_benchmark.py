@@ -150,7 +150,7 @@ def test_failed_container_preserves_measurement_and_safe_evidence(
         assert (retained / "trace.parquet").read_bytes() == b"partial parquet bytes"
 
 
-def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch):
+def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch, capsys):
     from throughput import run_unit as runner
 
     frozen = {
@@ -186,6 +186,9 @@ def test_failed_plan_indexes_partial_output(tmp_path, monkeypatch):
     assert raw["resources"]["peak_memory_bytes"] == 123456
     assert raw["resources"]["output_bytes"] == len(b"retained partial output")
     assert raw["resources"]["disk_status"] == "missing"
+    progress = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [event["event"] for event in progress] == ["unit-start", "unit-finished"]
+    assert progress[-1]["measurement"]["returncode"] == 137
     assert raw["artifacts"] == [bench.index(Path(raw["output_dir"]) / "trace.parquet")]
     assert raw["logs"][0]["sha256"] == bench.file_digest(Path(raw["logs"][0]["path"]))
 

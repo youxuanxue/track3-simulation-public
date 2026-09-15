@@ -1,0 +1,846 @@
+"""Measure complete local candidate experiments and derive promotion from evidence.
+
+Every result is non-rankable. A frozen plan names every unit, image, repeat and
+analysis rule before execution. Missing or changed evidence never counts as a pass.
+"""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from dataclasses import asdict
+from datetime import datetime, timezone
+import fcntl
+import hashlib
+import json
+import math
+from pathlib import Path
+import platform
+import subprocess
+import sys
+import time
+import tomllib
+from importlib.metadata import distribution
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
+import prepare_submission as preparation  # noqa: E402
+
+REPEATS = 5
+BOOTSTRAPS = 10000
+ANALYSIS_SEED = 314159
+CAPS = {
+    "cpus": 4,
+    "memory_bytes": 16 * 1024**3,
+    "disk_bytes": 10 * 1024**3,
+    "network": "none",
+}
+EXEMPLAR = "t3-EXAMPLE-vectorized-matching"
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
+
+
+def file_digest(path: Path) -> str:
+    with path.open("rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def save(path: Path, value: dict) -> None:
+    payload = json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as f:
+        f.write(payload)
+
+
+def index(path: Path) -> dict:
+    return {"path": str(path.resolve()), "sha256": file_digest(path)}
+
+
+def read_index(entry: dict) -> dict:
+    path = Path(entry["path"])
+    if file_digest(path) != entry["sha256"]:
+        raise ValueError("evidence bytes changed: " + str(path))
+    return json.loads(path.read_text())
+
+
+def identity() -> dict:
+    package = distribution("qfbench2-common")
+    # Documentation-only changes need not invalidate simulator/scorer evidence.
+    paths = sorted(
+        p
+        for root in ("baselines", "qfbench2_track_simulation", "throughput", "scripts")
+        for p in (ROOT / root).rglob("*")
+        if p.suffix in {".py", ".pyx", ".patch"}
+    )
+    paths += [
+        ROOT / "Dockerfile",
+        ROOT / "baselines/Dockerfile.candidate",
+        ROOT / "simulate",
+        ROOT / "simulate-batch",
+    ]
+    return {
+        "source_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip(),
+        "code_sha256": digest(
+            {str(p.relative_to(ROOT)): file_digest(p) for p in paths}
+        ),
+        "toolkit_version": package.version,
+        "toolkit_source": json.loads(package.read_text("direct_url.json") or "null"),
+        "scorer_sha256": file_digest(ROOT / "qfbench2_track_simulation/scoring.py"),
+    }
+
+
+def roster() -> list[dict]:
+    units = []
+    for path in sorted((ROOT / "units").iterdir()):
+        if not path.is_dir():
+            continue
+        card = tomllib.loads((path / "card.toml").read_text())
+        files = {
+            str(p.relative_to(path)): file_digest(p)
+            for p in sorted(path.rglob("*"))
+            if p.is_file()
+        }
+        units.append(
+            {
+                "unit": path.name,
+                "family": card["task"]["scenario_family"],
+                "input_sha256": digest(files),
+                "batch": (path / "batch.json").exists(),
+            }
+        )
+    if len(units) != 72 or sum(u["batch"] for u in units) != 6:
+        raise ValueError(
+            "public roster must contain all 72 units including six batches"
+        )
+    return units
+
+
+def host() -> dict:
+    info = json.loads(
+        subprocess.check_output(
+            ["docker", "info", "--format", "{{json .}}"], timeout=30
+        )
+    )
+    machine = Path("/etc/machine-id")
+    boot = Path("/proc/sys/kernel/random/boot_id")
+    return {
+        "system": platform.system(),
+        "arch": platform.machine(),
+        "node": platform.node(),
+        "machine_id": file_digest(machine) if machine.exists() else None,
+        "boot_id": boot.read_text().strip() if boot.exists() else None,
+        "docker_id": info["ID"],
+        "docker_arch": info["Architecture"],
+        "docker_cpus": info["NCPU"],
+        "docker_memory": info["MemTotal"],
+        "kernel": info["KernelVersion"],
+        "storage": info["Driver"],
+        "native": platform.system() == "Linux"
+        and platform.machine() in {"x86_64", "amd64"}
+        and info["Architecture"] in {"x86_64", "amd64"},
+    }
+
+
+def freeze(args: argparse.Namespace) -> dict:
+    if args.purpose == "confirmation" and not args.baseline:
+        raise ValueError("confirmation requires a fixed B0/current-stable image")
+    for image in [args.image, args.baseline]:
+        if image and (
+            "@sha256:" not in image or len(image.rsplit("@sha256:", 1)[1]) != 64
+        ):
+            raise ValueError("only fixed image digests may enter a plan")
+    plan = {
+        "schema": 1,
+        "profile": "developer",
+        "rankable": False,
+        "created_at": now(),
+        "round_id": args.round,
+        "purpose": args.purpose,
+        "history_dir": str(args.history.resolve()),
+        "hypothesis": args.hypothesis,
+        "identity": identity(),
+        "roster": roster(),
+        "host": host(),
+        "caps": CAPS,
+        "images": {"A": args.baseline or args.image, "B": args.image}
+        if args.baseline
+        else {"A": args.image},
+        "warmups": 1,
+        "repeats": REPEATS,
+        "bootstrap_samples": BOOTSTRAPS,
+        "analysis_seed": ANALYSIS_SEED,
+        "resampling": "complete-paired-groups-percentile",
+        "timeout_sec": args.timeout,
+        "budget_sec": args.budget,
+        "stop_conditions": [
+            "deadline",
+            "three-consecutive-same-failures",
+            "completed-once",
+        ],
+        "holdout": index(args.holdout) if args.holdout else None,
+    }
+    plan["plan_sha256"] = digest(plan)
+    save(args.out, plan)
+    return plan
+
+
+def validate_plan(plan: dict, *, current: bool = False) -> None:
+    if (
+        digest({k: v for k, v in plan.items() if k != "plan_sha256"})
+        != plan["plan_sha256"]
+    ):
+        raise ValueError("frozen plan changed")
+    if plan["rankable"] is not False or plan["profile"] != "developer":
+        raise ValueError("local plans must be non-rankable")
+    if plan["repeats"] != REPEATS or plan["warmups"] != 1 or plan["caps"] != CAPS:
+        raise ValueError("unexpected measurement protocol")
+    if (
+        plan["bootstrap_samples"] != BOOTSTRAPS
+        or plan["analysis_seed"] != ANALYSIS_SEED
+    ):
+        raise ValueError("analysis protocol changed")
+    if current:
+        current_identity = identity()
+        for key in (
+            "code_sha256",
+            "toolkit_version",
+            "toolkit_source",
+            "scorer_sha256",
+        ):
+            if current_identity[key] != plan["identity"][key]:
+                raise ValueError("stale code/toolkit/scorer evidence: " + key)
+        if roster() != plan["roster"]:
+            raise ValueError("roster changed")
+
+
+def gate_output(unit: Path, output: Path) -> dict:
+    """Use the published verifier; do not implement a second semantic scorer."""
+    from qfbench2_common.smoke import run_smoke
+    from qfbench2_track_simulation.scoring import build_developer_verifier
+
+    result = run_smoke(unit, output, build_developer_verifier)
+    return {
+        "admissible": result.admissible,
+        "gates": {
+            k: {"passed": v.passed, "detail": v.detail}
+            for k, v in result.gate_results.items()
+        },
+        "semantic_status": "unknown"
+        if unit.name == EXEMPLAR
+        else "passed"
+        if result.admissible
+        else "failed",
+    }
+
+
+def run_plan(
+    plan_path: Path,
+    output: Path,
+    diagnostic: bool = False,
+    scratch_volume: Path | None = None,
+) -> dict:
+    from throughput.run_unit import run_once
+
+    plan = json.loads(plan_path.read_text())
+    validate_plan(plan, current=True)
+    if host() != plan["host"]:
+        raise ValueError("host drift")
+    if not diagnostic and (
+        not plan["host"]["native"]
+        or plan["host"]["docker_memory"] < CAPS["memory_bytes"]
+    ):
+        raise ValueError(
+            "native linux/amd64 with at least 16 GiB is required; diagnostic runs cannot qualify"
+        )
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    save(output / "plan.json", plan)
+    if plan["purpose"] == "confirmation":
+        reserve = (
+            Path(plan["history_dir"])
+            / "confirmations"
+            / (digest(plan["images"]["B"]) + ".json")
+        )
+        save(reserve, {"plan": index(output / "plan.json"), "started_at": now()})
+    entries = []
+    started = time.monotonic()
+    stop_reason = "completed-once"
+    for group in range(-1, plan["repeats"]):
+        for unit in plan["roster"]:
+            arms = list(plan["images"])
+            if group % 2:
+                arms.reverse()
+            for arm in arms:
+                if time.monotonic() - started >= plan["budget_sec"]:
+                    stop_reason = "deadline"
+                    break
+                if host() != plan["host"]:
+                    stop_reason = "host-drift"
+                    break
+                run_root = (
+                    output
+                    / ("warmup" if group == -1 else f"group-{group}")
+                    / unit["unit"]
+                    / arm
+                )
+                run_root.mkdir(parents=True)
+                raw = {
+                    "profile": "developer",
+                    "rankable": False,
+                    "plan_sha256": plan["plan_sha256"],
+                    "host": plan["host"],
+                    "image": plan["images"][arm],
+                    "input_sha256": unit["input_sha256"],
+                    "unit": unit["unit"],
+                    "group": group,
+                    "arm": arm,
+                    "started_at": now(),
+                }
+                try:
+                    result = run_once(
+                        raw["image"],
+                        ROOT / "units" / unit["unit"],
+                        batch=unit["batch"],
+                        keep_output=run_root / "output",
+                        scratch_root=scratch_volume or run_root,
+                        bounded_disk=scratch_volume is not None,
+                        log_dir=run_root,
+                        run_as_host_user=True,
+                        timeout_sec=min(
+                            plan["timeout_sec"],
+                            plan["budget_sec"] - (time.monotonic() - started),
+                        ),
+                    )
+                    raw["measurement"] = asdict(result)
+                    raw["output_dir"] = str(run_root / "output")
+                    raw["parquet_sha256"] = preparation.output_hashes(
+                        run_root / "output"
+                    )
+                    raw["verification"] = gate_output(
+                        ROOT / "units" / unit["unit"], run_root / "output"
+                    )
+                    raw["artifacts"] = [
+                        index(p)
+                        for p in sorted((run_root / "output").rglob("*"))
+                        if p.is_file()
+                    ]
+                    # Output bytes are measured, but do not stand in for peak writable
+                    # container disk. Until quota/peak telemetry is available G2 stays missing.
+                    raw["resources"] = {
+                        "peak_memory_bytes": result.host_peak_memory_bytes,
+                        "output_bytes": sum(
+                            p.stat().st_size
+                            for p in (run_root / "output").rglob("*")
+                            if p.is_file()
+                        ),
+                        "peak_disk_bytes": result.host_peak_disk_bytes,
+                        "disk_capacity_bytes": result.disk_capacity_bytes,
+                        "disk_status": "bounded"
+                        if result.disk_capacity_bytes
+                        else "missing",
+                    }
+                    raw["status"] = (
+                        "passed" if raw["verification"]["admissible"] else "failed"
+                    )
+                except Exception as exc:
+                    raw["status"] = "failed"
+                    if hasattr(exc, "measurement"):
+                        raw["measurement"] = asdict(exc.measurement)
+                    raw["error"] = {"kind": type(exc).__name__, "message": str(exc)}
+                raw["logs"] = [index(p) for p in sorted(run_root.glob("*.log"))]
+                raw["finished_at"] = now()
+                save(run_root / "record.json", raw)
+                entries.append(index(run_root / "record.json"))
+                failure = (
+                    raw.get("error", {}).get("kind", "semantic")
+                    if raw["status"] == "failed"
+                    else None
+                )
+                consecutive = record_problem(
+                    Path(plan["history_dir"]), unit["unit"], failure
+                )
+                if consecutive >= 3:
+                    stop_reason = "three-consecutive-same-failures"
+                    break
+            if stop_reason != "completed-once":
+                break
+        if stop_reason != "completed-once":
+            break
+    result = {
+        "profile": "developer",
+        "rankable": False,
+        "plan": index(output / "plan.json"),
+        "runs": entries,
+        "stop_reason": stop_reason,
+        "diagnostic": diagnostic,
+        "finished_at": now(),
+    }
+    save(output / "evidence.json", result)
+    return result
+
+
+def paired_statistics(plan: dict, records: list[dict]) -> dict:
+    """Bootstrap whole paired groups, recomputing the defined median-rate score."""
+    import numpy as np
+
+    units = plan["roster"]
+    arms = list(plan["images"])
+    cube = np.zeros((len(arms), len(units), REPEATS))
+    lookup = {(r["arm"], r["unit"], r["group"]): r for r in records}
+    if len(lookup) != len(records):
+        raise ValueError("duplicate run evidence")
+    families = {}
+    for i, unit in enumerate(units):
+        families.setdefault(unit["family"], []).append(i)
+        for a, arm in enumerate(arms):
+            for group in range(REPEATS):
+                record = lookup[(arm, unit["unit"], group)]
+                m = record["measurement"]
+                wall, count = m["host_wall_clock_sec"], m["n_events"]
+                if (
+                    not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count <= 0
+                    or not isinstance(wall, (int, float))
+                    or not math.isfinite(wall)
+                    or wall <= 0
+                    or count != m["reported_n_events"]
+                ):
+                    raise ValueError("invalid host measurement")
+                cube[a, i, group] = count / wall
+    for unit in units:
+        counts = {
+            r["measurement"]["n_events"] for r in records if r["unit"] == unit["unit"]
+        }
+        if len(counts) != 1:
+            raise ValueError("paired candidates must preserve the unit event count")
+    rates = np.median(cube, axis=2)
+    result = {
+        "scores": {arm: float(rates[a].mean()) for a, arm in enumerate(arms)},
+        "units": {
+            u["unit"]: {arm: float(rates[a, i]) for a, arm in enumerate(arms)}
+            for i, u in enumerate(units)
+        },
+    }
+    if len(arms) != 2:
+        return result
+    rng = np.random.default_rng(plan["analysis_seed"])
+    samples = rng.integers(0, REPEATS, (plan["bootstrap_samples"], REPEATS))
+    # Each draw selects the SAME group indices for both arms and the entire roster.
+    deltas = np.median(cube[1][:, samples], axis=2) - np.median(
+        cube[0][:, samples], axis=2
+    )
+
+    def interval(x):
+        return [float(v) for v in np.quantile(x, [0.025, 0.975])]
+
+    result.update(
+        delta_score=float((rates[1] - rates[0]).mean()),
+        ci95=interval(deltas.mean(axis=0)),
+        family={
+            family: {
+                "delta": float((rates[1, idx] - rates[0, idx]).mean()),
+                "ci95": interval(deltas[idx].mean(axis=0)),
+            }
+            for family, idx in families.items()
+        },
+        worst_unit_delta=float((rates[1] - rates[0]).min()),
+    )
+    return result
+
+
+def assess(evidence_path: Path) -> dict:
+    evidence = json.loads(evidence_path.read_text())
+    plan = read_index(evidence["plan"])
+    validate_plan(plan, current=True)
+    records = [read_index(entry) for entry in evidence["runs"]]
+    reasons = []
+    expected = {
+        (a, u["unit"], g)
+        for a in plan["images"]
+        for u in plan["roster"]
+        for g in range(-1, REPEATS)
+    }
+    actual = {(r["arm"], r["unit"], r["group"]) for r in records}
+    if actual != expected or len(actual) != len(records):
+        reasons.append("incomplete-or-duplicate-roster")
+    for r in records:
+        unit = next(u for u in plan["roster"] if u["unit"] == r["unit"])
+        if (
+            r["host"] != plan["host"]
+            or r["image"] != plan["images"][r["arm"]]
+            or r["input_sha256"] != unit["input_sha256"]
+            or r["plan_sha256"] != plan["plan_sha256"]
+            or r["rankable"] is not False
+        ):
+            reasons.append("stale-run-identity")
+        if r["status"] != "passed" or not r.get("verification", {}).get("admissible"):
+            reasons.append("semantic-or-execution-failure")
+        for entry in r.get("artifacts", []):
+            if file_digest(Path(entry["path"])) != entry["sha256"]:
+                reasons.append("changed-output-artifact")
+        if r.get("status") == "passed":
+            from throughput.run_unit import _host_n_events, _reported_n_events
+
+            output_dir = Path(r.get("output_dir", ""))
+            try:
+                hashes = preparation.output_hashes(output_dir)
+                expected_files = preparation.repeat_artifacts(
+                    ROOT / "units" / unit["unit"]
+                )
+                gates = r["verification"]["gates"]
+                if (
+                    set(hashes) != expected_files
+                    or hashes != r["parquet_sha256"]
+                    or len(gates) != 4
+                    or not all(g["passed"] for g in gates.values())
+                    or not r.get("artifacts")
+                    or not r.get("logs")
+                ):
+                    raise ValueError("incomplete raw outputs or gates")
+                measured = r["measurement"]
+                if (
+                    _host_n_events(output_dir, unit["batch"]) != measured["n_events"]
+                    or _reported_n_events(output_dir, unit["batch"])
+                    != measured["n_events"]
+                ):
+                    raise ValueError(
+                        "footer/event counts differ from recorded host count"
+                    )
+            except (KeyError, OSError, ValueError):
+                reasons.append("invalid-raw-output")
+        for entry in r.get("logs", []):
+            if file_digest(Path(entry["path"])) != entry["sha256"]:
+                reasons.append("changed-output-artifact")
+        resources = r.get("resources", {})
+        capacity = resources.get("disk_capacity_bytes")
+        if (
+            resources.get("disk_status") != "bounded"
+            or not isinstance(capacity, int)
+            or not 0 < capacity <= CAPS["disk_bytes"]
+        ):
+            reasons.append("missing-disk-bound")
+        for key, cap in (
+            ("peak_memory_bytes", CAPS["memory_bytes"]),
+            ("peak_disk_bytes", CAPS["disk_bytes"]),
+        ):
+            value = resources.get(key)
+            if not isinstance(value, int) or value <= 0:
+                reasons.append("missing-" + key)
+            elif value > cap:
+                reasons.append("resource-cap-exceeded")
+    for arm in plan["images"]:
+        for unit in plan["roster"]:
+            repeats = [
+                r.get("parquet_sha256")
+                for r in records
+                if r["arm"] == arm and r["unit"] == unit["unit"]
+            ]
+            if not repeats or not repeats[0] or any(h != repeats[0] for h in repeats):
+                reasons.append("byte-repeat-failure")
+    if not plan["host"]["native"] or evidence.get("diagnostic"):
+        reasons.append("not-native-qualification")
+    if plan["holdout"] is None:
+        reasons.append("missing-independent-validation")
+    else:
+        from validate_candidate_parameters import validate as validate_holdout
+
+        heldouts = read_index(plan["holdout"])
+        for image in set(plan["images"].values()):
+            entry = heldouts.get(image)
+            if entry is None:
+                reasons.append("missing-independent-validation")
+                continue
+            try:
+                result = read_index(entry)
+                validate_holdout(result, image)
+                for key in ("toolkit_version", "toolkit_source", "scorer_sha256"):
+                    if result["identity"][key] != plan["identity"][key]:
+                        raise ValueError("heldout verifier changed")
+            except ValueError:
+                reasons.append("independent-validation-failed")
+    score = None
+    measurement_errors = {
+        "incomplete-or-duplicate-roster",
+        "semantic-or-execution-failure",
+        "stale-run-identity",
+        "changed-output-artifact",
+        "byte-repeat-failure",
+        "invalid-raw-output",
+    }
+    if not measurement_errors.intersection(reasons):
+        score = paired_statistics(plan, [r for r in records if r["group"] >= 0])
+    g2 = (
+        "pass"
+        if not reasons
+        else "fail"
+        if "semantic-or-execution-failure" in reasons
+        or "byte-repeat-failure" in reasons
+        or "independent-validation-failed" in reasons
+        else "missing"
+    )
+    g3 = "missing"
+    if (
+        score
+        and len(plan["images"]) == 2
+        and plan["purpose"] == "confirmation"
+        and g2 == "pass"
+    ):
+        if (
+            any(f["ci95"][1] < 0 for f in score["family"].values())
+            or score["ci95"][1] < 0
+        ):
+            g3 = "fail"
+        elif score["ci95"][0] > 0:
+            g3 = "pass"
+        else:
+            g3 = "inconclusive"
+    return {
+        "profile": "developer",
+        "rankable": False,
+        "G2": g2,
+        "G3": g3,
+        "reasons": sorted(set(reasons)),
+        "statistics": score,
+        "evidence": index(evidence_path),
+        "plan_sha256": plan["plan_sha256"],
+        "images": plan["images"],
+        "purpose": plan["purpose"],
+        "exemplar_semantics": "unknown",
+        "next_action": "repair-correctness"
+        if g2 == "fail"
+        else "supply-missing-evidence"
+        if g2 != "pass"
+        else "promote"
+        if g3 == "pass"
+        else "choose-new-hypothesis",
+    }
+
+
+@contextmanager
+def history_lock(directory: Path):
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def record_problem(directory: Path, unit: str, failure: str | None) -> int:
+    """A different round name cannot reset the same unresolved unit failure."""
+    with history_lock(directory):
+        path = directory / "problems.jsonl"
+        records = (
+            [json.loads(line) for line in path.read_text().splitlines()]
+            if path.exists()
+            else []
+        )
+        prior = next((r for r in reversed(records) if r["unit"] == unit), None)
+        count = (
+            prior["count"] + 1
+            if prior and failure and prior["failure"] == failure
+            else 1
+            if failure
+            else 0
+        )
+        with path.open("a") as f:
+            f.write(
+                json.dumps(
+                    {"time": now(), "unit": unit, "failure": failure, "count": count}
+                )
+                + "\n"
+            )
+        return count
+
+
+def history(directory: Path) -> list[dict]:
+    events = [json.loads(p.read_text()) for p in sorted(directory.glob("[0-9]*.json"))]
+    previous = None
+    for e in events:
+        if e["previous"] != previous or e["sha256"] != digest(
+            {k: v for k, v in e.items() if k != "sha256"}
+        ):
+            raise ValueError("candidate history modified")
+        previous = e["sha256"]
+    return events
+
+
+def decide(
+    directory: Path,
+    evidence_path: Path,
+    g1_paths: list[Path],
+    baseline_expected: str | None,
+) -> dict:
+    result = assess(evidence_path)
+    g1 = {
+        json.loads(p.read_text())["image"]: (p, json.loads(p.read_text()))
+        for p in g1_paths
+    }
+    with history_lock(directory):
+        events = history(directory)
+        stable = events[-1]["stable"] if events else None
+        if stable != baseline_expected:
+            raise ValueError("stable pointer changed; compare again")
+        for image in result["images"].values():
+            _, report = g1.get(image, (None, {}))
+            if (
+                report.get("scope") != "G1"
+                or report.get("status") != "passed"
+                or report.get("rankable") is not False
+            ):
+                result["reasons"].append("missing-G1")
+                continue
+            preparation.validate_delivery(report["delivery"], image)
+            if file_digest(Path(report["archive"])) != report["archive_sha256"]:
+                raise ValueError("submission package changed")
+        result["G1"] = "missing" if "missing-G1" in result["reasons"] else "pass"
+        attempt_images = list(result["images"].values())
+        candidate = attempt_images[-1]
+        if any(
+            e.get("candidate") == candidate and e.get("purpose") == "confirmation"
+            for e in events
+        ):
+            raise ValueError("this candidate already used its confirmation experiment")
+        can_promote = result["G1"] == result["G2"] == "pass" and (
+            (
+                stable is None
+                and result["purpose"] == "baseline"
+                and len(attempt_images) == 1
+            )
+            or (
+                candidate != stable
+                and stable == result["images"].get("A")
+                and result["G3"] == "pass"
+            )
+        )
+        event = {
+            "time": now(),
+            "action": "promote"
+            if can_promote
+            else "reject"
+            if result["G2"] == "fail" or result["G3"] == "fail"
+            else "hold",
+            "candidate": candidate,
+            "previous_stable": stable,
+            "stable": candidate if can_promote else stable,
+            "purpose": result["purpose"],
+            "decision": result,
+            "G1_evidence": [index(p) for p in g1_paths],
+            "previous": events[-1]["sha256"] if events else None,
+            "rankable": False,
+        }
+        event["sha256"] = digest(event)
+        save(directory / f"{len(events):06d}.json", event)
+        return event
+
+
+def rollback(directory: Path, target: str, reason: str, expected: str) -> dict:
+    """Revoke the current candidate and choose a still-qualified prior digest."""
+    if not reason.strip():
+        raise ValueError("rollback needs a concrete failure reason")
+    with history_lock(directory):
+        events = history(directory)
+        if not events or events[-1]["stable"] != expected or target == expected:
+            raise ValueError("stable pointer changed or rollback target is current")
+        revoked = {e["previous_stable"] for e in events if e["action"] == "rollback"}
+        candidates = [
+            e for e in events if e["action"] == "promote" and e["stable"] == target
+        ]
+        if not candidates or target in revoked:
+            raise ValueError(
+                "rollback target is not a usable historical stable candidate"
+            )
+        chosen = candidates[-1]
+        proof = chosen["decision"]["evidence"]
+        read_index(proof)
+        if assess(Path(proof["path"]))["G2"] != "pass":
+            raise ValueError("rollback target no longer passes current G2")
+        for entry in chosen["G1_evidence"]:
+            report = read_index(entry)
+            if report["image"] == target:
+                if file_digest(Path(report["archive"])) != report["archive_sha256"]:
+                    raise ValueError("rollback package changed")
+                break
+        else:
+            raise ValueError("rollback target has no G1 package")
+        event = {
+            "time": now(),
+            "action": "rollback",
+            "previous_stable": expected,
+            "stable": target,
+            "reason": reason,
+            "rankable": False,
+            "previous": events[-1]["sha256"],
+            "qualification": proof,
+        }
+        event["sha256"] = digest(event)
+        save(directory / f"{len(events):06d}.json", event)
+        return event
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="action", required=True)
+    freeze_p = sub.add_parser("freeze")
+    freeze_p.add_argument("--image", required=True)
+    freeze_p.add_argument("--baseline")
+    freeze_p.add_argument(
+        "--purpose", choices=["baseline", "screen", "confirmation"], required=True
+    )
+    freeze_p.add_argument("--round", required=True)
+    freeze_p.add_argument("--hypothesis", required=True)
+    freeze_p.add_argument("--timeout", type=float, default=1800)
+    freeze_p.add_argument("--budget", type=float, required=True)
+    freeze_p.add_argument("--holdout", type=Path)
+    freeze_p.add_argument("--history", type=Path, default=ROOT / "out/candidates")
+    freeze_p.add_argument("--out", type=Path, required=True)
+    run_p = sub.add_parser("run")
+    run_p.add_argument("--plan", type=Path, required=True)
+    run_p.add_argument("--out", type=Path, required=True)
+    run_p.add_argument("--diagnostic", action="store_true")
+    run_p.add_argument("--scratch-volume", type=Path)
+    assess_p = sub.add_parser("assess")
+    assess_p.add_argument("--evidence", type=Path, required=True)
+    decide_p = sub.add_parser("decide")
+    decide_p.add_argument("--evidence", type=Path, required=True)
+    decide_p.add_argument("--history", type=Path, required=True)
+    decide_p.add_argument("--g1", type=Path, action="append", default=[])
+    decide_p.add_argument("--expected-stable")
+    back = sub.add_parser("rollback")
+    back.add_argument("--history", type=Path, required=True)
+    back.add_argument("--to", required=True)
+    back.add_argument("--reason", required=True)
+    back.add_argument("--expected-stable", required=True)
+    args = p.parse_args()
+    try:
+        if args.action == "freeze":
+            result = freeze(args)
+        elif args.action == "run":
+            result = run_plan(args.plan, args.out, args.diagnostic, args.scratch_volume)
+        elif args.action == "assess":
+            result = assess(args.evidence)
+        elif args.action == "rollback":
+            result = rollback(args.history, args.to, args.reason, args.expected_stable)
+        else:
+            result = decide(args.history, args.evidence, args.g1, args.expected_stable)
+        print(json.dumps(result, indent=2, allow_nan=False))
+        return 0
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

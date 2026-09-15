@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
@@ -44,7 +45,9 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
     apply_runtime_patches()
     reset_abides_counters()
 
-    config = build_config(scenario)
+    # build_config and the native path may mutate nested oracle parameters.
+    # Keep the caller input pristine so exception recovery starts from the same seed.
+    config = build_config(deepcopy(scenario))
     agents = config["agents"]
     slim_exchange(agents[0])
     slim_agents(agents)
@@ -56,10 +59,16 @@ def run_scenario(scenario: dict[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
             return run_native(config)
         except Exception as exc:
             import logging
+
             logging.getLogger("fast_sim").warning(
                 "Native C kernel failed on scenario (%s); safely falling back to hybrid path",
                 exc,
             )
+            reset_abides_counters()
+            config = build_config(deepcopy(scenario))
+            agents = config["agents"]
+            slim_exchange(agents[0])
+            slim_agents(agents)
 
     # abides_core.abides.run ignores config["random_state_kernel"] and constructs
     # Kernel(random_state=RandomState(seed=0)). Match that exactly so any latent

@@ -9,7 +9,9 @@ units. Submit to Development as soon as a qualified candidate and the platform a
 available; further optimization must not delay that feedback. An organizer-side
 repeat-check defect still blocks Final readiness, but must not prevent us from
 freezing our own candidate. This plan records the review on 15 September 2026;
-implementation, infrastructure and competition submissions remain future work.
+the implementation entry points are now documented in [CANDIDATE-RUNBOOK.md](CANDIDATE-RUNBOOK.md).
+B0/B1 qualification and competition submission remain unproven until their actual
+image-bound evidence passes the gates below.
 The internal iteration loop has three gates: a verifiable submission package,
 complete local correctness and resource evidence, and a measured improvement over
 the current stable candidate. Each attempt either promotes a proven candidate or
@@ -231,7 +233,7 @@ digest 后重新验收。若没有可用稳定候选，状态仍是 B0 未完成
 避免把执行流程留给人工抄表：后续由现有 `scripts/prepare_submission.py` 继续拥有候选
 身份、验证和封包；计划新增一个本地 benchmark 入口，自动固定 roster、配对运行、
 统计/校验、比较资源与生成报告，并持续标记 `rankable=false`，不复制共享评分器。
-两者通过镜像 digest 和证据路径衔接。此自动化属于 P0/P2 交付，不在本文伪装为已有工具。
+两者通过镜像 digest 和证据路径衔接。实现及操作入口见 [运行说明](CANDIDATE-RUNBOOK.md)；工具通过测试不代表候选通过验收。
 
 闭环控制与状态派生也归该 benchmark 入口，复用 preparation 工具的验证结果；不再建
 第二个封包器或评分器。它消费以下最小证据索引，输出一次决策及 `next_action`：
@@ -250,7 +252,7 @@ digest 后重新验收。若没有可用稳定候选，状态仍是 B0 未完成
 首次落地依次完成三件事：**迁移 preparation 的新版封包验收 → 补齐 G2/exemplar 与
 原生主机计时 → 实现上述配对测量、证据派生和晋级控制**。控制器自身的验收必须注入
 缺失单元、旧版本证据、伪高自报速度、漂移主机、语义失败和跨零区间，确认均不能晋级；
-完整正向证据才允许晋级，并能回退。此处定义交付范围，本轮尚未实现该控制器或启动实验。
+完整正向证据才允许晋级，并能回退。此处定义候选验收范围；控制器自身的测试不代替实际候选实验。
 
 ## 执行顺序、责任与验收
 
@@ -282,12 +284,13 @@ P0/P1 产出可靠候选；P2 可以提前 profiling，但候选晋级依赖 P1�
 如果 9/19 仍有 exemplar 或参数语义失败，P2 资源全部转向修复；如果 9/23 仍没有可信
 性能提升，就提交已验证的稳定候选，不用最后四天赌重写。不可复现的高分没有晋级资格。
 
-## 提交工具迁移：当前代码仍需修改
+## 提交工具迁移：实现入口
 
-`scripts/prepare_submission.py` 目前仍写虚构模型、等待 `confirmed_c5_team_id` /
-`team_id_mapping_source`、只打一个 `submission.json`。**即使旧测试全绿，也不能按最新
-流程完成首次上传。** P0 的完成条件是实际修改并验证这些行为，本文没有宣称已完成。
-根 `submission.json` 是旧式元数据，不是可直接交给新打包命令的 C5 descriptor。
+`scripts/prepare_submission.py` 已改为 `models: []`、真实网站队号派生 alias 和官方
+team-claim 2.0 双文件 ZIP。平台未开放不阻塞内部封包；真实 Team Key 未提供时仍拒绝
+生成通过记录。完整 G2/G3 与候选历史由 `scripts/benchmark_candidates.py` 派生，操作
+命令、资源边界与证据格式见 [运行说明](CANDIDATE-RUNBOOK.md)。根 `submission.json`
+保留为旧式元数据，不能直接作为 C5 上传。
 
 Python 3.13 的评测/打包环境使用以下正式安装源；ABIDES 参赛镜像保留自己的固定数值栈：
 
@@ -334,9 +337,9 @@ changelog、Track 3 #2/#4/#5、tag 和部署通知，紧急修复随公告处理
 如果官方受理开放但测量缺陷未关闭，依其书面指引保留提交机会，保存回执并标记问题，
 不得自行把“阻塞”解释成放弃截止时间；也不能伪造计时或改 scorer 宣称 Final-ready。
 
-## 本轮校验
+## 计划审阅时的历史校验
 
-本轮只修改计划文档，未合入上游、迁移打包代码、重建镜像或上传参赛包。
+以下为实施前的历史记录，不是当前候选验收。本轮只修改计划文档，未合入上游、迁移打包代码、重建镜像或上传参赛包。
 在临时 Python 3.13 环境从正式 tag 安装 toolkit 2.4.1，记录的解析提交与 [S1] 一致：
 
 - 72/72 单元的 manifest 校验和及 `assert_public_safe` 检查通过；卡片基础检查通过。

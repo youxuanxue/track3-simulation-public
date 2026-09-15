@@ -47,6 +47,7 @@ import json
 import os
 import shutil
 import statistics
+import threading
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,6 +68,16 @@ class UnitRun:
     host_gpu_seconds: float | None
     host_peak_memory_bytes: int | None
     returncode: int
+    host_peak_disk_bytes: int | None = None
+    disk_capacity_bytes: int | None = None
+
+
+class UnitExecutionError(RuntimeError):
+    """A failed invocation with its host timing and resource evidence preserved."""
+
+    def __init__(self, message: str, measurement: UnitRun) -> None:
+        super().__init__(message)
+        self.measurement = measurement
 
 
 @dataclass
@@ -229,6 +240,9 @@ def run_once(
     keep_output: Path | None = None,
     timeout_sec: float = DEFAULT_RUN_TIMEOUT_SEC,
     run_as_host_user: bool = False,
+    scratch_root: Path | None = None,
+    bounded_disk: bool = False,
+    log_dir: Path | None = None,
 ) -> UnitRun:
     """One timed, DEADLINE-BOUNDED container invocation of the unit.
 
@@ -238,16 +252,27 @@ def run_once(
     leaves a root-owned temp directory behind. What it must never do -- and what the deleted
     ``_reclaim_output`` did -- is run the PARTICIPANT'S IMAGE again to chown the tree.
     """
+    capacity = None
+    if bounded_disk:
+        if scratch_root is None or os.name != "posix":
+            raise ValueError("bounded disk requires a dedicated Linux scratch mount")
+        fs = os.statvfs(str(scratch_root))
+        capacity = fs.f_blocks * fs.f_frsize
+        if not 0 < capacity <= 10 * 1024**3:
+            raise ValueError("scratch filesystem capacity must be at most 10 GiB")
     with (
-        tempfile.TemporaryDirectory(prefix="t3_in_") as in_tmp,
+        tempfile.TemporaryDirectory(prefix="t3_in_", dir=scratch_root) as in_tmp,
         tempfile.TemporaryDirectory(
-            prefix="t3_out_", ignore_cleanup_errors=True
+            prefix="t3_out_", dir=scratch_root, ignore_cleanup_errors=True
         ) as out_tmp,
-        tempfile.TemporaryDirectory(prefix="t3_cid_") as cid_tmp,
+        tempfile.TemporaryDirectory(prefix="t3_cid_", dir=scratch_root) as cid_tmp,
     ):
         in_dir, out_dir = Path(in_tmp), Path(out_tmp)
         _stage_input(unit_dir, in_dir, batch)
         cidfile = Path(cid_tmp) / "container.cid"
+
+        temp_dir = in_dir / "tmp"
+        temp_dir.mkdir()
 
         verb_args = (
             [
@@ -281,19 +306,66 @@ def run_once(
             "-v",
             f"{out_dir}:/output",
         ]
+        if bounded_disk:
+            cmd += ["--read-only", "-v", f"{temp_dir}:/tmp"]
         if run_as_host_user and os.name == "posix":
             cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
         cmd += [image, *verb_args]
 
-        proc, wall_clock, gpu_s, peak_mem = timed_container_run(
-            cmd, cidfile=cidfile, gpus=gpus, timeout_sec=timeout_sec
+        disk_peak = [0]
+        stop = threading.Event()
+
+        def sample_disk() -> None:
+            while not stop.is_set():
+                fs = os.statvfs(str(scratch_root))
+                disk_peak[0] = max(
+                    disk_peak[0], (fs.f_blocks - fs.f_bfree) * fs.f_frsize
+                )
+                stop.wait(0.05)
+
+        sampler = (
+            threading.Thread(target=sample_disk, daemon=True) if bounded_disk else None
         )
+        if sampler:
+            sampler.start()
+        try:
+            proc, wall_clock, gpu_s, peak_mem = timed_container_run(
+                cmd, cidfile=cidfile, gpus=gpus, timeout_sec=timeout_sec
+            )
+        finally:
+            stop.set()
+            if sampler:
+                sampler.join(timeout=2)
+        if bounded_disk:
+            fs = os.statvfs(str(scratch_root))
+            disk_peak[0] = max(disk_peak[0], (fs.f_blocks - fs.f_bfree) * fs.f_frsize)
+        if log_dir is not None:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "stdout.log").write_bytes(proc.stdout)
+            (log_dir / "stderr.log").write_bytes(proc.stderr)
         if proc.returncode != 0:
             tail = proc.stderr[-2000:].decode("utf-8", errors="replace")
-            raise RuntimeError(
+            if keep_output is not None and any(out_dir.iterdir()):
+                try:
+                    retain_output(out_dir, keep_output, unit_dir)
+                except (OSError, ValueError) as exc:
+                    if log_dir is not None:
+                        (log_dir / "retention-error.log").write_text(str(exc))
+            raise UnitExecutionError(
                 f"Container exited with code {proc.returncode} on {unit_dir.name} "
                 f"(a negative code means the {timeout_sec:g}s deadline fired and the container "
-                f"was killed).\n{tail}"
+                f"was killed).\n{tail}",
+                UnitRun(
+                    0.0,
+                    0,
+                    0,
+                    wall_clock,
+                    gpu_s,
+                    peak_mem,
+                    proc.returncode,
+                    disk_peak[0] if bounded_disk else None,
+                    capacity,
+                ),
             )
 
         # Both halves of the local rate are the harness's: the event count comes from the emitted
@@ -312,7 +384,15 @@ def run_once(
             retain_output(out_dir, keep_output, unit_dir)
         eps = n_events / wall_clock if wall_clock > 0 else 0.0
         return UnitRun(
-            eps, n_events, reported, wall_clock, gpu_s, peak_mem, proc.returncode
+            eps,
+            n_events,
+            reported,
+            wall_clock,
+            gpu_s,
+            peak_mem,
+            proc.returncode,
+            disk_peak[0] if bounded_disk else None,
+            capacity,
         )
 
 

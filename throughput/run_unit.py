@@ -57,6 +57,17 @@ from . import node_fingerprint
 from .timer import DEFAULT_RUN_TIMEOUT_SEC, gpu_docker_args, timed_container_run
 
 
+# Local reception adds no byte ceiling below the bounded scratch filesystem.
+# The official Track 3 output cap is unpublished; this is a developer assumption,
+# not an override of the production Runner's C3 policy.
+LOCAL_DISK_BYTES = 10 * 1024**3
+
+
+def retention_byte_limits() -> dict[str, int]:
+    """Allow any output that fits the local 10 GiB runtime disk to be retained."""
+    return {"max_file_bytes": LOCAL_DISK_BYTES, "max_total_bytes": LOCAL_DISK_BYTES}
+
+
 @dataclass
 class UnitRun:
     """One timed invocation of a unit."""
@@ -111,6 +122,7 @@ class UnitRecord:
             # the previous version of this record called itself "authoritative" and the scorer
             # believed it.
             "telemetry_source": "local_harness",
+            "retention_byte_limits": retention_byte_limits(),
             "profile": "developer",
             "rankable": False,
         }
@@ -187,6 +199,7 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
     Imported lazily so the argv and routing tests, which run in the secret-free CI job, do not need
     the toolkit.
     """
+    from qfbench2_common.contracts.artifact_tree import TreeLimits
     from qfbench2_common.sanitize import (
         TreeRefused,
         materialize_tree,
@@ -201,9 +214,10 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
         shutil.rmtree(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = staging_sibling(destination)
+    limits = TreeLimits(**retention_byte_limits())
     try:
         result = materialize_tree(
-            out_dir, staging, allowed_paths=allowed_paths_for(unit_dir)
+            out_dir, staging, allowed_paths=allowed_paths_for(unit_dir), limits=limits
         )
         if result.unsafe_modes:
             raise TreeRefused(
@@ -220,7 +234,7 @@ def retain_output(out_dir: Path, destination: Path, unit_dir: Path) -> None:
             )
         if not result.files:
             raise TreeRefused("the run produced no accepted output files")
-        errors = verify_destination(staging, result.files)
+        errors = verify_destination(staging, result.files, limits=limits)
         if errors:
             raise TreeRefused("the copied tree did not verify: " + "; ".join(errors))
         promote(staging, destination)
@@ -258,7 +272,7 @@ def run_once(
             raise ValueError("bounded disk requires a dedicated Linux scratch mount")
         fs = os.statvfs(str(scratch_root))
         capacity = fs.f_blocks * fs.f_frsize
-        if not 0 < capacity <= 10 * 1024**3:
+        if not 0 < capacity <= LOCAL_DISK_BYTES:
             raise ValueError("scratch filesystem capacity must be at most 10 GiB")
     with (
         tempfile.TemporaryDirectory(prefix="t3_in_", dir=scratch_root) as in_tmp,

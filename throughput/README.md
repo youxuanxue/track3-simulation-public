@@ -29,6 +29,17 @@ descending, measured by the RUNNER on the official benchmark hardware (see
 and the SimProfile verifier. **None of it re-orders the primary `events/sec` leaderboard** —
 these signals are *reported, not ranked*.
 
+Local retained output permits up to **10 GiB per file and 10 GiB per invocation**, including
+all subs of a batch. This matches the bounded local scratch disk, so reception does not add
+a smaller byte ceiling to a completed run. The earlier shared defaults of 64 MiB/file and
+256 MiB/tree rejected validly named large traces before local scoring. Both the copy and its
+verification use the same expanded limits; records include `retention_byte_limits`.
+The path allowlist, file-count/depth bounds and no-follow checks still apply.
+This is a local experiment assumption while the official output cap remains unpublished
+([organizer reply](https://github.com/Agenthon-2026/track3-simulation-public/issues/1#issuecomment-5534948011)),
+not proof of platform acceptance. The card's `disk = "10G"` and the local runtime disk cap
+are unchanged. A complete trace must still fit that disk; a shorter diagnostic cannot qualify it.
+
 They are computed on the DEVELOPER profile only. On the official path the private
 `final_scorer` omits them and records why: GPU-award eligibility keys on measured GPU
 utilization, and the C2 telemetry block does not yet carry a participant-cgroup-attributed GPU

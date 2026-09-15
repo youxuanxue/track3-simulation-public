@@ -332,7 +332,7 @@ def run_plan(
     diagnostic: bool = False,
     scratch_volume: Path | None = None,
 ) -> dict:
-    from throughput.run_unit import run_once
+    from throughput.run_unit import retention_byte_limits, run_once
 
     plan = json.loads(plan_path.read_text())
     validate_plan(plan, current=True)
@@ -376,6 +376,7 @@ def run_plan(
                 raw = {
                     "profile": "developer",
                     "rankable": False,
+                    "retention_byte_limits": retention_byte_limits(),
                     "plan_sha256": plan["plan_sha256"],
                     "host": plan["host"],
                     "image": plan["images"][arm],

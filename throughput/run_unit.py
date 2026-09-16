@@ -76,7 +76,7 @@ class UnitRun:
     """One timed invocation of a unit."""
 
     events_per_sec: float
-    n_events: int  # host-counted from the emitted trace; numerator of the ranked rate
+    n_events: int  # host-counted from the emitted trace; numerator of the local rate
     reported_n_events: int  # what the submission declared; kept for the audit trail
     host_wall_clock_sec: float
     host_gpu_seconds: float | None
@@ -96,7 +96,7 @@ class UnitExecutionError(RuntimeError):
 
 @dataclass
 class UnitRecord:
-    """The authoritative record for one unit: what the scoring side should consume."""
+    """A local developer measurement; never consumed by the production scorer."""
 
     unit: str
     verb: str
@@ -363,6 +363,25 @@ def run_once(
             log_dir.mkdir(parents=True, exist_ok=True)
             (log_dir / "stdout.log").write_bytes(proc.stdout)
             (log_dir / "stderr.log").write_bytes(proc.stderr)
+            # Durable before retention or any Parquet parser: SIGKILL cannot be caught.
+            with (log_dir / "execution.json").open("x") as handle:
+                json.dump(
+                    {
+                        "image": image,
+                        "unit": unit_dir.name,
+                        "rankable": False,
+                        "returncode": proc.returncode,
+                        "host_wall_clock_sec": wall_clock,
+                        "host_gpu_seconds": gpu_s,
+                        "host_peak_memory_bytes": peak_mem,
+                        "host_peak_disk_bytes": disk_peak[0] if bounded_disk else None,
+                        "disk_capacity_bytes": capacity,
+                    },
+                    handle,
+                    allow_nan=False,
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
         if proc.returncode != 0:
             from qfbench2_common.sanitize import TreeRefused
 

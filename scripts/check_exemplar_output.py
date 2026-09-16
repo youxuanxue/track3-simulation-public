@@ -30,7 +30,15 @@ def check_trace(output: Path) -> dict:
         raise ValueError("trace schema differs from the public registry")
     rows = 0
     previous = None
-    for batch in parquet.iter_batches(batch_size=262144):
+    # Limit Arrow to one row group at a time; long traces must not queue all groups.
+    batches = (
+        batch
+        for group in range(parquet.num_row_groups)
+        for batch in parquet.iter_batches(
+            batch_size=262144, row_groups=[group], use_threads=False
+        )
+    )
+    for batch in batches:
         for name in schema.names:
             if name != "side" and batch.column(name).null_count:
                 raise ValueError("null in required column: " + name)

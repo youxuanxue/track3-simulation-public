@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 import prepare_submission as preparation  # noqa: E402
+from verify_candidate_output import bounded_verify as gate_output  # noqa: E402
 
 REPEATS = 5
 BOOTSTRAPS = 10000
@@ -106,7 +107,6 @@ def identity() -> dict:
     )
     paths += [
         ROOT / "Dockerfile",
-        ROOT / "baselines/Dockerfile.candidate",
         ROOT / "baselines/Dockerfile.native-candidate",
         ROOT / "simulate",
         ROOT / "simulate-batch",
@@ -298,30 +298,6 @@ def validate_plan(plan: dict, *, current: bool = False) -> None:
             raise ValueError("roster changed")
 
 
-def gate_output(unit: Path, output: Path) -> dict:
-    """Use the published verifier; do not implement a second semantic scorer."""
-    from qfbench2_common.smoke import run_smoke
-    from qfbench2_track_simulation.scoring import build_developer_verifier
-
-    if unit.name == EXEMPLAR and not (unit / "trace.parquet").exists():
-        from check_exemplar_output import verify
-
-        return verify(unit, output)
-    result = run_smoke(unit, output, build_developer_verifier)
-    return {
-        "admissible": result.admissible,
-        "gates": {
-            k: {"passed": v.passed, "detail": v.detail}
-            for k, v in result.gate_results.items()
-        },
-        "semantic_status": "unknown"
-        if unit.name == EXEMPLAR
-        else "passed"
-        if result.admissible
-        else "failed",
-    }
-
-
 def normalized_arch(arch: str) -> str:
     return {"x86_64": "amd64", "aarch64": "arm64"}.get(arch, arch)
 
@@ -464,12 +440,15 @@ def run_plan(
                         ),
                     )
                     raw["measurement"] = asdict(result)
+                    save(run_root / "measurement.json", raw["measurement"])
                     raw["output_dir"] = str(run_root / "output")
                     raw["parquet_sha256"] = preparation.output_hashes(
                         run_root / "output"
                     )
                     raw["verification"] = gate_output(
-                        ROOT / "units" / unit["unit"], run_root / "output"
+                        ROOT / "units" / unit["unit"],
+                        run_root / "output",
+                        plan["budget_sec"] - (time.monotonic() - started),
                     )
                     raw["status"] = (
                         "passed" if raw["verification"]["admissible"] else "failed"
@@ -504,6 +483,11 @@ def run_plan(
                         else "missing",
                     }
                 raw["logs"] = [index(p) for p in sorted(run_root.glob("*.log"))]
+                raw["checkpoints"] = [
+                    index(run_root / name)
+                    for name in ("execution.json", "measurement.json")
+                    if (run_root / name).exists()
+                ]
                 raw["finished_at"] = now()
                 save(run_root / "record.json", raw)
                 entries.append(index(run_root / "record.json"))
@@ -727,7 +711,7 @@ def assess(evidence_path: Path) -> dict:
                     )
             except (KeyError, OSError, ValueError):
                 reasons.append("invalid-raw-output")
-        for entry in r.get("logs", []):
+        for entry in r.get("logs", []) + r.get("checkpoints", []):
             if file_digest(Path(entry["path"])) != entry["sha256"]:
                 reasons.append("changed-output-artifact")
         resources = r.get("resources", {})
@@ -1101,6 +1085,13 @@ def main() -> int:
         else:
             result = decide(args.history, args.evidence, args.g1, args.expected_stable)
         print(json.dumps(result, indent=2, allow_nan=False))
+        if args.action == "run":
+            return int(result["stop_reason"] != "completed-once")
+        if args.action == "assess":
+            gate = {"screen": "screen_status", "baseline": "G2", "confirmation": "G3"}[
+                result["purpose"]
+            ]
+            return int(result[gate] != "pass")
         return 0
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

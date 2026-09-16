@@ -219,7 +219,7 @@ jobs:
 
   native-build:
     name: Build and verify native candidate
-    if: github.event_name == 'workflow_dispatch' && inputs.build_native
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.build_native)
     needs: [firewall, lint-type, validate-units]
     runs-on: ubuntu-24.04
     timeout-minutes: 30

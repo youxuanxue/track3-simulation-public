@@ -727,6 +727,10 @@ cdef class CTrace:
         import numpy as np
 
         cdef Py_ssize_t i, n_order, n_quote, n, j
+        cdef int ev
+        cdef int[:] event_codes
+        cdef unsigned char[:] side_codes
+        cdef object[:] message_labels, side_labels
         n_order = self.n_o
         n_quote = self.n_q
         if n_order == 0 and n_quote == 0:
@@ -760,23 +764,29 @@ cdef class CTrace:
                 last_exec[int(oid_arr[pos])] = int(pos)
             msg = np.empty(n_order, dtype=object)
             side_str = np.empty(n_order, dtype=object)
+            # Typed views avoid a Python ndarray index and integer conversion for
+            # every row. Output labels, final-fill lookup and row order are unchanged.
+            event_codes = ev_arr
+            side_codes = side_b
+            message_labels = msg
+            side_labels = side_str
             for i in range(n_order):
-                ev = int(ev_arr[i])
+                ev = event_codes[i]
                 if ev == EV_EXEC:
-                    msg[i] = "ORDER_FILLED" if last_exec.get(int(oid_arr[i])) == i else "PARTIAL_FILL"
+                    message_labels[i] = "ORDER_FILLED" if last_exec.get(int(oid_arr[i])) == i else "PARTIAL_FILL"
                 elif ev == EV_SUBMIT:
-                    msg[i] = "ORDER_SUBMITTED"
+                    message_labels[i] = "ORDER_SUBMITTED"
                 elif ev == EV_ACCEPT:
-                    msg[i] = "ORDER_ACCEPTED"
+                    message_labels[i] = "ORDER_ACCEPTED"
                 elif ev == EV_CANCEL:
-                    msg[i] = "ORDER_CANCELLED"
+                    message_labels[i] = "ORDER_CANCELLED"
                 elif ev == EV_PARTIAL:
-                    msg[i] = "PARTIAL_FILL"
+                    message_labels[i] = "PARTIAL_FILL"
                 elif ev == EV_FILLED:
-                    msg[i] = "ORDER_FILLED"
+                    message_labels[i] = "ORDER_FILLED"
                 else:
-                    msg[i] = "ORDER_REPLACED"
-                side_str[i] = "BID" if side_b[i] else "ASK"
+                    message_labels[i] = "ORDER_REPLACED"
+                side_labels[i] = "BID" if side_codes[i] else "ASK"
         else:
             t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg = side_str = None
         if n_quote:

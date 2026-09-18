@@ -732,21 +732,16 @@ cdef class CTrace:
         if n_order == 0 and n_quote == 0:
             return None
         if n_order:
-            t_arr = np.empty(n_order, dtype=np.int64)
-            aid_arr = np.empty(n_order, dtype=np.int64)
-            oid_arr = np.empty(n_order, dtype=np.int64)
-            px_arr = np.empty(n_order, dtype=np.int64)
-            sz_arr = np.empty(n_order, dtype=np.int64)
-            ev_arr = np.empty(n_order, dtype=np.int32)
-            side_b = np.empty(n_order, dtype=np.uint8)
-            for i in range(n_order):
-                t_arr[i] = self.ot[i]
-                aid_arr[i] = self.oaid[i]
-                oid_arr[i] = self.ooid[i]
-                px_arr[i] = self.opx[i]
-                sz_arr[i] = self.osz[i]
-                ev_arr[i] = self.oev[i]
-                side_b[i] = self.oside[i]
+            # Zero-copy views over the malloc'd scratch buffers, then narrow
+            # int32 -> int64 for price/size via astype. The old per-row Python
+            # loop was the dominant streaming cost on the throughput exemplar.
+            t_arr = np.asarray(<long long[:n_order]>self.ot)
+            aid_arr = np.asarray(<int[:n_order]>self.oaid)
+            oid_arr = np.asarray(<long long[:n_order]>self.ooid)
+            px_arr = np.asarray(<int[:n_order]>self.opx).astype(np.int64)
+            sz_arr = np.asarray(<int[:n_order]>self.osz).astype(np.int64)
+            ev_arr = np.asarray(<int[:n_order]>self.oev)
+            side_b = np.asarray(<unsigned char[:n_order]>self.oside)
             order_idx = np.argsort(t_arr, kind="stable")
             t_arr = t_arr[order_idx]
             aid_arr = aid_arr[order_idx]
@@ -779,17 +774,11 @@ cdef class CTrace:
         else:
             t_arr = aid_arr = oid_arr = px_arr = sz_arr = msg_code = side_code = None
         if n_quote:
-            qt_arr = np.empty(n_quote, dtype=np.int64)
-            qaid_arr = np.empty(n_quote, dtype=np.int64)
-            qside_b = np.empty(n_quote, dtype=np.uint8)
-            qpx_arr = np.empty(n_quote, dtype=np.int64)
-            qsz_arr = np.empty(n_quote, dtype=np.int64)
-            for j in range(n_quote):
-                qt_arr[j] = self.qt[j]
-                qaid_arr[j] = self.qaid[j]
-                qside_b[j] = self.qside[j]
-                qpx_arr[j] = self.qpx[j]
-                qsz_arr[j] = self.qsz[j]
+            qt_arr = np.asarray(<long long[:n_quote]>self.qt)
+            qaid_arr = np.asarray(<int[:n_quote]>self.qaid)
+            qside_b = np.asarray(<unsigned char[:n_quote]>self.qside)
+            qpx_arr = np.asarray(<int[:n_quote]>self.qpx).astype(np.int64)
+            qsz_arr = np.asarray(<int[:n_quote]>self.qsz).astype(np.int64)
             # Keep the final quote per (t_ns, side), ordered by each key's first
             # appearance -- the exact rule the Python dict loop applied, vectorized.
             keys = qt_arr * 2 + qside_b.astype(np.int64)
@@ -812,7 +801,7 @@ cdef class CTrace:
             n_quote = 0
         n = n_order + n_quote
         t_all = np.empty(n, dtype=np.int64)
-        aid_all = np.empty(n, dtype=np.int64)
+        aid_all = np.empty(n, dtype=np.int32)
         msg_code_all = np.empty(n, dtype=np.int8)
         side_code_all = np.empty(n, dtype=np.int8)
         px_all = np.empty(n, dtype=np.int64)
@@ -837,7 +826,7 @@ cdef class CTrace:
         idx = _stable_lexsort(t_all, oid_all)
         return {
             "t_ns": t_all[idx],
-            "agent_id": aid_all[idx].astype(np.int32, copy=False),
+            "agent_id": aid_all[idx],
             "msg_code": msg_code_all[idx],
             "side_code": side_code_all[idx],
             "price": px_all[idx],
@@ -872,10 +861,10 @@ cdef class CTrace:
             "t_ns": a["t_ns"],
             "agent_id": a["agent_id"],
             "msg_type": pc.take(
-                msg_values, pa.array(a["msg_code"], type=pa.int64())
+                msg_values, pa.array(a["msg_code"], type=pa.int8())
             ),
             "side": pc.take(
-                side_values, pa.array(a["side_code"], type=pa.int64())
+                side_values, pa.array(a["side_code"], type=pa.int8())
             ),
             "price": a["price"],
             "size": a["size"],

@@ -277,7 +277,7 @@ def run_native(config: dict[str, Any], output_paths=None) -> tuple[Any, Any, dic
     return trace, msg, {"col_trace": None, "col_ledger": None, "agents": config["agents"]}
 
 
-def stream_native(spec, output_paths, chunk_rows=262144):
+def stream_native(spec, output_paths, chunk_rows=1048576):
     """Classify final executions, then replay into bounded Parquet row groups."""
     from copy import deepcopy
     from fast_sim._native import (

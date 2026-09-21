@@ -23,6 +23,7 @@ from abides_fork.trace import (
     _MSG_DTYPES,
     _TRACE_DTYPES,
 )
+from fast_sim.ordering import stable_lexsort
 
 _ORDER_EVENT_MAP: dict[str, str] = {
     "ORDER_SUBMITTED": "ORDER_SUBMITTED",
@@ -65,10 +66,7 @@ def _side_to_str(value: Any) -> str | None:
     return None
 
 
-def _stable_lexsort(primary: np.ndarray, secondary: np.ndarray) -> np.ndarray:
-    """Stable sort by ``primary`` then ``secondary`` (pandas ``kind='stable'``)."""
-    idx = np.argsort(secondary, kind="stable")
-    return idx[np.argsort(primary[idx], kind="stable")]
+_stable_lexsort = stable_lexsort
 
 
 def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:

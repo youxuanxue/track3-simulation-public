@@ -770,7 +770,7 @@ cdef class CTrace:
             self.q_ask_i = -1
 
     def to_arrays(self):
-        from fast_sim.extract import _stable_lexsort
+        from fast_sim.ordering import stable_lexsort
         import numpy as np
 
         cdef Py_ssize_t i, n_order, n_quote, n, j
@@ -854,7 +854,7 @@ cdef class CTrace:
             px_all[n_order:] = q_px
             sz_all[n_order:] = q_sz
             oid_all[n_order:] = -1
-        idx = _stable_lexsort(t_all, oid_all)
+        idx = stable_lexsort(t_all, oid_all)
         return {
             "t_ns": t_all[idx],
             "agent_id": aid_all[idx],

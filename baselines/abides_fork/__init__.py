@@ -15,4 +15,17 @@ from __future__ import annotations
 
 __all__ = ["extract_trace", "TRACE_COLUMNS"]
 
-from abides_fork.trace import TRACE_COLUMNS, extract_trace
+
+def __getattr__(name: str):
+    """Load the trace adapter only for callers that request its public API.
+
+    The ``simulate`` CLI imports the stdlib-only scenario resolver before it
+    chooses the native path.  Eagerly importing the ABIDES trace adapter here
+    pulled pandas and the full ABIDES package into every small scenario's cold
+    start, even though native output conversion does not use that adapter.
+    """
+    if name in __all__:
+        from abides_fork.trace import TRACE_COLUMNS, extract_trace
+
+        return {"TRACE_COLUMNS": TRACE_COLUMNS, "extract_trace": extract_trace}[name]
+    raise AttributeError(name)

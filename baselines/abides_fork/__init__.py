@@ -13,10 +13,12 @@ baseline Docker image; there is no separate ABIDES fork repository.
 
 from __future__ import annotations
 
+from typing import Any
+
 __all__ = ["extract_trace", "TRACE_COLUMNS"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Load the trace adapter only for callers that request its public API.
 
     The ``simulate`` CLI imports the stdlib-only scenario resolver before it

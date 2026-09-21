@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from abides_fork.trace import _MSG_DTYPES, _TRACE_DTYPES
+from fast_sim.ordering import stable_lexsort
 
 
 class ColumnTrace:
@@ -82,7 +83,6 @@ class ColumnTrace:
             _ORDER_EVENT_MAP,
             _empty_trace,
             _side_to_str,
-            _stable_lexsort,
         )
 
         if not self.ot and not self.qt:
@@ -179,7 +179,7 @@ class ColumnTrace:
             sz_all[n_order:] = q_sz
             oid_all[n_order:] = q_oid
 
-        idx = _stable_lexsort(t_all, oid_all)
+        idx = stable_lexsort(t_all, oid_all)
         df = pd.DataFrame(
             {
                 "t_ns": t_all[idx],

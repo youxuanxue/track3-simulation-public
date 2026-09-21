@@ -709,7 +709,8 @@ cdef class CTrace:
         self.add_quote_c(t_ns, 1 if is_bid else 0, price, size, agent_id)
 
     def to_dataframe(self):
-        from fast_sim.extract import _empty_trace, _stable_lexsort
+        from fast_sim.extract import _empty_trace
+        from fast_sim.ordering import stable_lexsort
         from abides_fork.trace import _TRACE_DTYPES
         import numpy as np
         import pandas as pd
@@ -826,7 +827,7 @@ cdef class CTrace:
             px_all[n_order:] = q_px
             sz_all[n_order:] = q_sz
             oid_all[n_order:] = q_oid
-        idx = _stable_lexsort(t_all, oid_all)
+        idx = stable_lexsort(t_all, oid_all)
         df = pd.DataFrame(
             {
                 "t_ns": t_all[idx],
@@ -3186,5 +3187,4 @@ def kernel_runner(self, agent_actions=None):
         self.gym_agents[0].update_raw_state()
         return {"done": True, "result": self.gym_agents[0].get_raw_state()}
     return {"done": True, "result": None}
-
 

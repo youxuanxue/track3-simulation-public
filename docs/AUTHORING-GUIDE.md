@@ -119,8 +119,8 @@ that it is stale.
 
 ### `agent_mix` and `agent_configs` — which agents to spawn
 
-`sim_scenario.schema.json` requires a top-level **`agent_mix`** object: a map of agent
-type → count. This is the schema-validated summary of the population. The detailed
+A scenario carries a top-level **`agent_mix`** object: a map of agent
+type → count. This is the required summary of the population. The detailed
 per-agent parameters live in **`agent_configs`**; the per-type counts in `agent_configs`
 must match `agent_mix`. Example `agent_mix`:
 

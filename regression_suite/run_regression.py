@@ -67,8 +67,8 @@ logger = logging.getLogger(__name__)
 # Canonical event vocabulary
 # ---------------------------------------------------------------------------
 # These constants MUST match the sealed final scorer
-# (private/scoring/final_scorer.py) and the trace schema in
-# common/schemas/sim_scenario.schema.json.  A mismatch silently turns the
+# (private/scoring/final_scorer.py) and the event vocabulary in
+# templates/trace_column_registry.json.  A mismatch silently turns the
 # Tier-A semantic check into a no-op (it would see zero fills and pass every
 # submission), so they are defined here once and reused throughout.
 

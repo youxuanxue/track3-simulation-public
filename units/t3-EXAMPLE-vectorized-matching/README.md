@@ -26,8 +26,9 @@ recorded in the 65 shipped public `units/*/events.json`, geometric mean 13,793 (
 
 **What "5×" means here.** It is the scientific ambition of the unit — a substantial
 constant-factor speedup over pure-Python ABIDES — not a threshold anything checks. There is no
-hard floor: any admissible submission is ranked, and ranking is by raw median `events_per_sec`
-against other submissions, not against a fixed number.
+hard floor: any admissible submission is ranked, and ranking is by the arithmetic mean of
+per-unit `events_per_sec` over the full evaluation roster against other submissions, not against
+a fixed number.
 
 **Ordering must be preserved.** The LOB implements a continuous double auction with
 price-time-priority (ITCH/OUCH ordering). The verifier replays fill events from the candidate

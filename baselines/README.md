@@ -178,9 +178,12 @@ simulate-batch --batch-dir /input/scenarios   --out-dir /output
 ```
 
 - `/input/scenario.json` — read-only bind-mount of the scenario configuration.
-  Schema: `common/schemas/sim_scenario.schema.json`.
+  Schema: `common/schemas/sim_scenario.schema.json` — note this bundled schema is currently
+  **stale** (it demands an envelope no shipped scenario uses and rejects all of them); the
+  operative contract is `templates/scenario.json` plus `docs/AUTHORING-GUIDE.md`.
 - `/output/trace.parquet` — the full event trace, one row per market event.
-  Must conform to the column spec in `common/schemas/sim_scenario.schema.json §outputs`.
+  Must conform to the column spec in `templates/trace_column_registry.json` (the enumeration
+  the regression harness and the adapter are built from).
 - `/output/message_trace.parquet` — message-level kernel ledger. Required by the
   exchange-protocol, reactive-agent, and batch units; feeds the latency/causality and
   g3.5 message-ledger checks.
@@ -238,11 +241,14 @@ only, and note that it has never been reproduced on the evaluation hardware.
 
 ### Public interface stub (Python 3.13)
 
-Participants may implement any internal architecture — vectorized NumPy, Numba JIT,
-compiled Cython extensions, Rust via PyO3, a compiled C extension, etc. — as long as
-the Docker CLI interface and the output schema described in §1 are preserved. The
-following Python stub documents the logical interface that the reference simulator
-satisfies:
+Participants may implement any internal architecture — compiled Cython extensions,
+Rust via PyO3, a compiled C extension, vectorized NumPy, Numba JIT, etc. — as long as
+the Docker CLI interface and the output schema described in §1 are preserved.
+(Compiled routes are where the throughput evidence is: a NumPy-vectorized order book
+is measured 3–5× slower on the cancel/match paths, and Numba's nopython mode cannot
+touch the Python object event loop — see
+`../research/2026-09-21-speed-competition-landscape.md` §5.) The following Python
+stub documents the logical interface that the reference simulator satisfies:
 
 ```python
 from pathlib import Path
@@ -255,7 +261,8 @@ class VectorizedLOBSimulator:
     Parameters
     ----------
     scenario_config : dict
-        Parsed contents of the scenario JSON (matches sim_scenario.schema.json).
+        Parsed contents of the scenario JSON (the bundled sim_scenario.schema.json
+        is stale — the operative contract is templates/scenario.json).
     seed : int
         Random seed for reproducible agent behaviour. Must be a non-negative
         integer < 2**31 (enforced by the seed-derivation protocol in timer.py).
@@ -273,7 +280,7 @@ class VectorizedLOBSimulator:
         -------
         trace_df : pd.DataFrame
             Full event trace. Columns must match the spec in
-            common/schemas/sim_scenario.schema.json §outputs.columns.
+            templates/trace_column_registry.json.
         events_dict : dict
             Aggregate summary. Must contain at minimum:
               - "n_events": int       — used by timer.py for events/sec

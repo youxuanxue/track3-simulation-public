@@ -5,8 +5,10 @@ wrote it recorded that it had **invented** the figure because frozen ruling R-2 
 maximum and supplied none. This file is the ratification decision, expressed as executable
 assertions rather than as prose:
 
-* 2e6 sits **below** the published competitive band for a batch only eight markets wide
-  (8 x 600,000 = 4,800,000), and two orders of magnitude below the widest batch the track ships.
+* 2e6 sits **below** the competitive band this repository previously published for a batch only
+  eight markets wide (8 x 600,000 = 4,800,000 — a band since withdrawn as never measured, which
+  is exactly the failure mode this file ratifies against), and two orders of magnitude below the
+  widest batch the track ships.
   A ceiling below an attainable honest score does not bound an exploit — ``W`` is the domain
   *minimum*, so R-2's property is carried entirely by the floor — it deletes ranking information at
   the top and ties every strong submission at the ceiling.

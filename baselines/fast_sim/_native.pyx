@@ -88,6 +88,7 @@ cdef struct COrder:
 cdef struct Event:
     long long deliver_at
     long long message_id
+    Py_ssize_t ledger_slot
     int sender_id
     int recipient_id
     int kind
@@ -185,6 +186,21 @@ cdef struct LRow:
     int mtype
     long long seq
     unsigned char flags
+
+
+cdef inline long long _round_i64(double value) except *:
+    """Python round-to-even without boxing in the exact small-integer range."""
+    cdef double lower, fraction
+    cdef long long integer
+    if -4503599627370496.0 <= value <= 4503599627370496.0:
+        lower = floor(value)
+        fraction = value - lower
+        integer = <long long>lower
+        if fraction > 0.5 or (fraction == 0.5 and (integer & 1)):
+            integer += 1
+        return integer
+    # Retain Python errors/conversion semantics for non-finite and large values.
+    return <long long>int(round(float(value)))
 
 
 cdef class MT19937:
@@ -773,14 +789,11 @@ cdef class CTrace:
             sz_arr = np.asarray(<int[:n_order]>self.osz).astype(np.int64)
             ev_arr = np.asarray(<int[:n_order]>self.oev)
             side_b = np.asarray(<unsigned char[:n_order]>self.oside)
-            order_idx = np.argsort(t_arr, kind="stable")
-            t_arr = t_arr[order_idx]
-            aid_arr = aid_arr[order_idx]
-            oid_arr = oid_arr[order_idx]
-            px_arr = px_arr[order_idx]
-            sz_arr = sz_arr[order_idx]
-            ev_arr = ev_arr[order_idx]
-            side_b = side_b[order_idx]
+            # NativeSim delivers events in nondecreasing ``self.now`` order;
+            # streaming flushes only at timestamp boundaries, so each chunk
+            # is already time ordered.  The final lexsort below supplies the
+            # required (t_ns, order_id) tie break. Skip the redundant timestamp
+            # sort and its seven column gathers without changing row order.
             msg_code = np.full(n_order, 5, dtype=np.int8)  # ORDER_REPLACED
             msg_code[ev_arr == EV_SUBMIT] = 0              # ORDER_SUBMITTED
             msg_code[ev_arr == EV_ACCEPT] = 1              # ORDER_ACCEPTED
@@ -1001,23 +1014,39 @@ cdef class CLedger:
         parent = np.empty(n, dtype=np.int64)
         parent_na = np.zeros(n, dtype=np.bool_)
         mtype = np.empty(n, dtype=object)
+        # Typed memoryviews keep the row materialization loop in Cython's C
+        # fast path without requiring NumPy's C-API headers at build time.
+        cdef long long[::1] seq_v = seq
+        cdef long long[::1] mid_v = mid
+        cdef int[::1] src_v = src
+        cdef int[::1] dst_v = dst
+        cdef long long[::1] t_recv_v = t_recv
+        cdef long long[::1] lat_v = lat
+        cdef long long[::1] t_send_v = t_send
+        cdef unsigned char[::1] t_send_na_v = t_send_na
+        cdef long long[::1] oid_v = oid
+        cdef unsigned char[::1] oid_na_v = oid_na
+        cdef long long[::1] parent_v = parent
+        cdef unsigned char[::1] parent_na_v = parent_na
+        cdef object[::1] mtype_v = mtype
+        cdef int mt
         names = _MT_NAMES
         for i in range(n):
             r = &self.rows[i]
-            seq[i] = r.seq
-            mid[i] = r.mid
-            src[i] = r.src
-            dst[i] = r.dst
-            t_recv[i] = r.t_recv
-            lat[i] = r.lat
-            t_send[i] = r.t_send
-            oid[i] = r.oid
-            parent[i] = r.parent
-            t_send_na[i] = bool(r.flags & LF_SEND_NA)
-            oid_na[i] = bool(r.flags & LF_OID_NA)
-            parent_na[i] = bool(r.flags & LF_PARENT_NA)
+            seq_v[i] = r.seq
+            mid_v[i] = r.mid
+            src_v[i] = r.src
+            dst_v[i] = r.dst
+            t_recv_v[i] = r.t_recv
+            lat_v[i] = r.lat
+            t_send_v[i] = r.t_send
+            oid_v[i] = r.oid
+            parent_v[i] = r.parent
+            t_send_na_v[i] = (r.flags & LF_SEND_NA) != 0
+            oid_na_v[i] = (r.flags & LF_OID_NA) != 0
+            parent_na_v[i] = (r.flags & LF_PARENT_NA) != 0
             mt = r.mtype
-            mtype[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
+            mtype_v[i] = names[mt] if 0 <= mt < len(names) else "AGENT_WAKEUP"
         keep = seq >= 0
         if not keep.any():
             return None
@@ -1086,6 +1115,19 @@ cdef class CLedger:
             "order_id": _nullable_int64(a["order_id"], a["oid_na"]),
             "causal_parent": _nullable_int64(a["causal_parent"], a["parent_na"]),
         }).astype(_MSG_DTYPES, copy=False)
+
+    def count_only_result(self):
+        """Return the delivery count without materializing ledger columns.
+
+        Mode 3 deliberately never allocates ``LRow`` records.  Keep the result
+        as the small Python ``UnstoredLedger`` protocol object used by the
+        streaming path so callers can read ``num_rows`` without branching on
+        the native implementation.
+        """
+        from fast_sim.streaming import UnstoredLedger
+        result = UnstoredLedger()
+        result.num_rows = int(self.count)
+        return result
 
 
 cdef class CPriceLevel:
@@ -1220,7 +1262,8 @@ cdef class NativeSim:
     cdef int n
     cdef object bids
     cdef object asks
-    cdef object pending
+    cdef CLedger pending_rows
+    cdef Py_ssize_t free_pending
     cdef object exec_pending, exec_closed
     cdef object mts
     cdef object lat_rs
@@ -1275,7 +1318,8 @@ cdef class NativeSim:
         self.ledger = CLedger()
         self.bids = []
         self.asks = []
-        self.pending = {}
+        self.pending_rows = CLedger()
+        self.free_pending = -1
         self.exec_pending = {}
         self.exec_closed = set()
         self.mts = []
@@ -1309,6 +1353,7 @@ cdef class NativeSim:
         )
 
     cdef void _zero_ev(self, Event *ev) noexcept:
+        ev.ledger_slot = -1
         ev.order.time_placed = 0
         ev.order.order_id = 0
         ev.order.agent_id = 0
@@ -1339,72 +1384,80 @@ cdef class NativeSim:
             value = self.lat_min
         elif value > self.lat_max:
             value = self.lat_max
-        return <long long>int(round(float(value)))
+        return _round_i64(value)
+
+    cdef void _record_message(self, Event *ev, long long sent, long long lat,
+                              int mtype, long long oid, bint oid_na) except *:
+        """Bind metadata to this queued hop, including shared-ID broadcasts.
+
+        Buffered rows already have stable integer indices. Streaming retains
+        only in-flight rows in recycled C slots; busy requeues carry the slot
+        with the event, keeping the original receive time and latency intact.
+        """
+        cdef unsigned char flags = 0
+        cdef Py_ssize_t slot
+        cdef LRow *row
+        ev.ledger_slot = -1
+        if self.ledger.mode == 1 or self.ledger.mode == 3:
+            return
+        if oid_na:
+            flags |= LF_OID_NA
+        if self.causal == 0:
+            flags |= LF_PARENT_NA
+        if self.ledger.mode == 2:
+            if self.free_pending >= 0:
+                slot = self.free_pending
+                row = &self.pending_rows.rows[slot]
+                self.free_pending = row.seq
+                row.mid = ev.message_id
+                row.src = ev.sender_id
+                row.dst = ev.recipient_id
+                row.t_send = sent
+                row.t_recv = ev.deliver_at
+                row.lat = lat
+                row.mtype = mtype
+                row.oid = oid
+                row.parent = self.causal
+                row.flags = flags
+            else:
+                slot = self.pending_rows.append_c(
+                    ev.message_id, ev.sender_id, ev.recipient_id, sent,
+                    ev.deliver_at, lat, mtype, oid, self.causal, -1, flags,
+                )
+            ev.ledger_slot = slot
+        else:
+            ev.ledger_slot = self.ledger.append_c(
+                ev.message_id, ev.sender_id, ev.recipient_id, sent,
+                ev.deliver_at, lat, mtype, oid, self.causal, -1, flags,
+            )
 
     cdef void _enq(self, int sid, int rid, int kind, Event *ev, long long delay, int mtype, long long oid, bint oid_na) except *:
-        cdef long long mid, sent, lat, deliver
-        cdef unsigned char flags
-        cdef Py_ssize_t idx
-        mid = self.next_mid
+        cdef long long sent, lat
+        ev.message_id = self.next_mid
         self.next_mid += 1
         sent = self.now + self.cdelay[sid] + delay
         lat = self._latency(sid, rid)
-        deliver = sent + lat
-        ev.deliver_at = deliver
+        ev.deliver_at = sent + lat
         ev.sender_id = sid
         ev.recipient_id = rid
-        ev.message_id = mid
         ev.kind = kind
+        self._record_message(ev, sent, lat, mtype, oid, oid_na)
         self.q._push_raw(ev[0])
         if self.trace.mode == 1 and kind == KIND_EXEC:
             self.exec_pending[oid] = self.exec_pending.get(oid, 0) + 1
-        if self.ledger.mode == 1:
-            return
-        flags = 0
-        if oid_na:
-            flags |= LF_OID_NA
-        if self.causal == 0:
-            flags |= LF_PARENT_NA
-        if self.ledger.mode == 2:
-            self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
-        elif self.ledger.mode == 3:
-            self.pending[(mid, rid)] = True
-        else:
-            idx = self.ledger.append_c(
-                mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
-            )
-            self.pending[(mid, rid)] = idx
 
     cdef void _enq_mid(self, int sid, int rid, int kind, Event *ev, long long delay, int mtype, long long mid, long long oid, bint oid_na) except *:
         """Enqueue with a pre-assigned message_id (MarketClosePrice broadcast)."""
-        cdef long long sent, lat, deliver
-        cdef unsigned char flags
-        cdef Py_ssize_t idx
+        cdef long long sent, lat
         sent = self.now + self.cdelay[sid] + delay
         lat = self._latency(sid, rid)
-        deliver = sent + lat
-        ev.deliver_at = deliver
+        ev.deliver_at = sent + lat
         ev.sender_id = sid
         ev.recipient_id = rid
         ev.message_id = mid
         ev.kind = kind
+        self._record_message(ev, sent, lat, mtype, oid, oid_na)
         self.q._push_raw(ev[0])
-        if self.ledger.mode == 1:
-            return
-        flags = 0
-        if oid_na:
-            flags |= LF_OID_NA
-        if self.causal == 0:
-            flags |= LF_PARENT_NA
-        if self.ledger.mode == 2:
-            self.pending[(mid, rid)] = (mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, flags)
-        elif self.ledger.mode == 3:
-            self.pending[(mid, rid)] = True
-        else:
-            idx = self.ledger.append_c(
-                mid, sid, rid, sent, deliver, lat, mtype, oid, self.causal, -1, flags,
-            )
-            self.pending[(mid, rid)] = idx
 
     cdef void _wakeup_at(self, int aid, long long when) except *:
         cdef Event ev
@@ -1827,16 +1880,21 @@ cdef class NativeSim:
         if ev.kind == KIND_MKT_CLOSED:
             a.mkt_closed = 1
 
-    cdef void _deliver_seq(self, long long mid, int rid) except *:
-        cdef object key = (mid, rid)
-        cdef object idx = self.pending.pop(key, None)
-        if idx is not None:
-            if self.ledger.mode == 2:
-                self.ledger.append_c(idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7], idx[8], self.seq, idx[9])
-            elif self.ledger.mode == 3:
-                self.ledger.count += 1
-            else:
-                self.ledger.rows[<Py_ssize_t>idx].seq = self.seq
+    cdef void _deliver_seq(self, Event *ev) except *:
+        cdef Py_ssize_t slot = ev.ledger_slot
+        cdef LRow *row
+        if self.ledger.mode == 3:
+            self.ledger.count += 1
+        elif self.ledger.mode == 2:
+            row = &self.pending_rows.rows[slot]
+            self.ledger.append_c(
+                row.mid, row.src, row.dst, row.t_send, row.t_recv, row.lat,
+                row.mtype, row.oid, row.parent, self.seq, row.flags,
+            )
+            row.seq = self.free_pending
+            self.free_pending = slot
+        elif self.ledger.mode == 0:
+            self.ledger.rows[slot].seq = self.seq
         self.seq += 1
 
     def setup(self, spec):
@@ -1970,7 +2028,7 @@ cdef class NativeSim:
             self.atime[rid] = self.now
             self.atime[rid] += self.cdelay[rid]
             self.causal = mid
-            self._deliver_seq(mid, rid)
+            self._deliver_seq(&ev)
             if kind == KIND_LIMIT or kind == KIND_CANCEL_REQ or kind == KIND_SPREAD_REQ or kind == KIND_HOURS_REQ or kind == KIND_CLOSE_REQ:
                 self._exch_recv(sid, &ev)
             else:
@@ -1980,11 +2038,18 @@ cdef class NativeSim:
         return self.trace.to_arrow(), self.ledger.to_arrow()
 
 
-def run_native_sim(spec):
+def run_native_sim(spec, count_only=False):
     cdef NativeSim sim = NativeSim()
+    if count_only:
+        # Optional throughput-scale ledgers still need their exact delivery
+        # count for events.json, but no row payload or Arrow conversion.
+        sim.ledger.mode = 3
     sim.setup(spec)
     sim.run_loop()
-    return sim.result()
+    trace = sim.trace.to_arrow()
+    if count_only:
+        return trace, sim.ledger.count_only_result()
+    return trace, sim.ledger.to_arrow()
 
 
 def classify_native_executions(spec):

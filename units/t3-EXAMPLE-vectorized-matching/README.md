@@ -8,7 +8,7 @@ Verifier: `t3.semantic_stylized` | Metric: `events_per_sec` ↑
 
 ## 1. Task Summary
 
-Vectorize the ABIDES limit-order-book (LOB) matching engine to achieve at least a **5× throughput
+Accelerate the ABIDES limit-order-book (LOB) matching engine to achieve at least a **5× throughput
 improvement** over the unmodified ABIDES Python stack while keeping matching-engine semantics and
 return-distribution statistics within published tolerance ceilings.
 
@@ -26,8 +26,9 @@ recorded in the 65 shipped public `units/*/events.json`, geometric mean 13,793 (
 
 **What "5×" means here.** It is the scientific ambition of the unit — a substantial
 constant-factor speedup over pure-Python ABIDES — not a threshold anything checks. There is no
-hard floor: any admissible submission is ranked, and ranking is by raw median `events_per_sec`
-against other submissions, not against a fixed number.
+hard floor: any admissible submission is ranked, and ranking is by the arithmetic mean of
+per-unit `events_per_sec` over the full evaluation roster against other submissions, not against
+a fixed number.
 
 **Ordering must be preserved.** The LOB implements a continuous double auction with
 price-time-priority (ITCH/OUCH ordering). The verifier replays fill events from the candidate
@@ -66,26 +67,53 @@ suite), not on the throughput scenario itself.
 These are starting points. Participants are free to use any technique that satisfies the interface
 and semantic contracts.
 
-**NumPy sorted-array price levels.**  
-Replace the Python `SortedDict` price-level structure with a pre-allocated NumPy array of price
-buckets, keeping an integer pointer to the best bid/ask. Insert and cancel are O(1) amortized;
-matching is a vectorized scan from the best price inward.
+**Compiled event core (the route the evidence supports).**
+Keep the event loop single-threaded and order-exact, and move the whole hot core — event queue,
+order book, matching, agent stepping — into one compiled extension (Cython, Rust via PyO3, or a
+C/C++ extension). Serious matching engines sustain millions of book operations per second per core
+this way, against ~72 µs/event for pure-Python ABIDES — and exact fill ordering, integer
+timestamps and message causality come for free. Per-event crossings between Python and a compiled
+matching engine alone cost more than they save, so the core must go down as a whole, not one
+function at a time. `baselines/fast_sim/` is an in-repo Cython candidate built on this route.
 
-**Numba JIT-compiled order queue.**  
-Annotate the inner fill loop with `@numba.njit`. The queue data structure (price → deque of
-`(order_id, size, timestamp)`) can be represented as a structured NumPy array to remain
-Numba-compatible. First-run JIT compilation cost is amortized over the benchmark (first run is
-discarded as warm-up).
+**Integer-domain, allocation-free data structures.**
+Prices, sizes, timestamps and order IDs are integers — keep them that way end-to-end (no floats on
+the exact path; no `-ffast-math`; keep `-ffp-contract=off`). Back the book with a flat array
+indexed by integer price level plus intrusive per-level FIFO lists and an order-ID→node map,
+pre-allocated from pools/arenas so the hot path performs zero allocations. Cancel lazily
+(mark, don't unlink).
 
-**Vectorized fill loop.**  
-Pre-compute all incoming orders for a time slice, sort by price then arrival time, then fill
-against the book in a single vectorized pass. Requires that oracle and agent message generation
-be factored into a batch API.
+**Event-queue data structure.**
+The kernel's pending-event queue is a top hotspot. A binary heap works; a calendar queue is O(1)
+in practice for near-constant latency increments (Brown 1988); a LadderQueue stays O(1) even under
+heavy-tailed (e.g. Pareto) increments (Tang et al. 2005). Measure first, then swap.
 
-**Batch order processing.**  
-Group agent wakeup events into mini-batches keyed by simulation nanosecond. Process each batch
-as a NumPy array of (price, size, side, agent_id) tuples rather than dispatching events one at a
-time through Python method calls. This reduces Python-level dispatch overhead.
+**Deterministic, derivable randomness.**
+Draw all randomness from counter-based streams derived from (seed, scenario, agent, counter) —
+e.g. Philox/Threefry — never from wall-clock time, dict order, or a shared global generator whose
+draw order your optimizations might perturb. Tier-A compares the emitted trace, not your RNG, but
+changing the reference's draw order changes latencies and therefore arrival order (see the Tier-A
+note in `../../README.md`).
+
+**Cold start is part of the score.**
+The ranked clock is the runner's host wall clock and covers the whole container window — startup
+and initialization included (see Section 4). AOT-compile what you can, keep imports lean, and
+vendor every dependency (`network=none`).
+
+**Debunked routes — do not spend time on these.**
+- *NumPy-vectorized order book*: measured 3–5× **slower** than tree/list structures on the cancel
+  and match paths (JAX-LOB, arXiv:2308.13289, Table 5). Variable-length, branch-heavy,
+  order-dependent workloads do not vectorize.
+- *Numba on the Python object event loop*: nopython mode cannot touch Python object graphs, and
+  per-event boundary crossings cost more than the compiled code saves.
+- *Batching orders into time-slice mini-batches*: changes execution order, which breaks Tier-A
+  exactness and destroys volatility clustering (Family 5 gate) — see `../../docs/CATEGORIES.md`.
+- *Single-world matching on GPU*: a single order book on GPU is measured 2–3 orders of magnitude
+  slower than CPU (JAX-LOB). GPU only pays off as world-level batching (on the order of 1000
+  independent worlds), which matches the batch-family units, not this single-scenario unit.
+
+The evidence base for this section is collected in
+`../../research/2026-09-21-speed-competition-landscape.md`.
 
 **What NOT to change.**  
 - Do not alter the oracle model (mean-reverting process) or its parameters.
@@ -138,9 +166,12 @@ outputs are written to `/output/`.
 All six keys are required; the g1 schema gate marks a submission `SCHEMA_INVALID_OUTPUT`
 (inadmissible) if any is missing.
 
-`events_per_sec` is measured as total events in `trace.parquet` divided by wall-clock seconds
-from simulation start to simulation end (not including container startup). The harness cross-checks
-this against its own external wall-clock measurement.
+Your self-reported `events_per_sec` (events in `trace.parquet` divided by your simulation
+wall-clock) is only cross-checked for internal consistency (g1: within ±5% of
+`n_events ÷ wall_clock_sec`; g3: `n_events` equals the real parquet row count). The **ranked** rate
+is measured by the runner — its own event count over its own host wall clock, which covers the
+whole container window, startup and initialization included. Optimize cold start accordingly; see
+"How throughput is measured" in `../../README.md`.
 
 ---
 
@@ -173,11 +204,12 @@ Failure label: `t3.stylized_fact_breach`
 
 ### Ranking Metric
 
-Admissible submissions are ranked by **median `events_per_sec` across the measured throughput
-repeats**, with the first run discarded as JIT warm-up. The repeat count and the warm-up discard
-are committed in the evaluation plan rather than fixed in this document. The rate is
-host-measured — the runner's own event count over the runner's own wall clock — not read from your
-`events.json`. Higher is better (`leaderboard_sort = "desc"`).
+Admissible submissions are ranked by the **arithmetic mean of per-unit `events_per_sec` over the
+complete evaluation roster**, each unit rate being the median of the runner's measured repeats.
+The repeat count and any warm-up discard are committed in the evaluation plan rather than fixed in
+this document. The rate is host-measured — the runner's own event count over the runner's own wall
+clock, container window included — not read from your `events.json`. Higher is better
+(`leaderboard_sort = "desc"`).
 
 ---
 

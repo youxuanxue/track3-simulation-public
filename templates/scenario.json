@@ -1,5 +1,5 @@
 {
-  "_comment": "QFBench 2.0 Track 3 scenario template. Validate with: python -m qfbench2_common.validate scenario.json",
+  "_comment": "QFBench 2.0 Track 3 scenario template. Do NOT validate with qfbench2_common.validate — its bundled schema is stale and rejects every shipped scenario (see docs/AUTHORING-GUIDE.md).",
   "scenario_id": "00000000-0000-0000-0000-000000000000",
   "description": "REPLACE: One sentence describing the scenario.",
   "scenario_family": "REPLACE",
@@ -7,7 +7,7 @@
   "seed": 42,
   "horizon_ns": 28800000000000,
 
-  "_comment_agent_mix": "Schema-required (sim_scenario.schema.json): agent type -> count summary. Must match the counts in agent_configs below.",
+  "_comment_agent_mix": "Required: agent type -> count summary. Must match the counts in agent_configs below.",
   "agent_mix": {
     "NoiseTrader": 100,
     "ValueTrader": 20,
@@ -100,7 +100,6 @@
     "tier": "A",
     "timestamp_tolerance_ns": 1000,
     "kendall_tau_floor": 0.999,
-    "spread_bps_tolerance": 10.0,
-    "oracle_rmse_tolerance_pct": 20.0
+    "spread_bps_tolerance": 10.0
   }
 }

@@ -5,8 +5,8 @@
 #     docker build -f Dockerfile -t track3-gpu-starter:dev .
 #
 # CUDA 12.8 on Ubuntu 24.04 matches the organizer scoring image
-# (alphathon/qfbench2-scoring:ubuntu24.04-cuda12.8), so this is the best-informed target until the
-# eval box spec lands. The host driver comes from the box, not the image.
+# (alphathon/qfbench2-scoring:ubuntu24.04-cuda12.8) and is verified against the eval box — B200,
+# sm_100 (see baselines/README.md §3). The host driver comes from the box, not the image.
 #
 # The `-runtime` tag, kept small, plus CUDA_PATH below. CuPy JIT-compiles its element-wise
 # kernels through nvrtc at RUN time and needs real CUDA headers to do it, which a `-runtime` base
@@ -28,7 +28,7 @@
 # thrust may still fail to compile, and that is untested. If you hit that, switch the base to
 # `nvidia/cuda:12.8.0-devel-ubuntu24.04` and drop the CUDA_PATH block -- it costs ~6 GB (10 GB vs
 # 4 GB measured, not the ~3 GB this file estimated before anyone measured it).
-# TODO(hub): confirm against the fixed-SKU box (CUDA toolkit + driver, see baselines/README.md §5).
+# Box-confirmed: B200 / sm_100, driver and host toolkit in baselines/README.md §3.
 FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -43,7 +43,7 @@ RUN apt-get update \
 # wheel), and it does not carry: on linux/amd64 with cupy-cuda12x 13.6.0 the extra installs
 # NOTHING (`pip3 list` shows no `nvidia-*` packages at all), and pip does not fail on an extra it
 # does not recognise, so the image built clean and died at first kernel launch. The headers now
-# come from the `-devel` base instead.
+# come from CuPy's vendored copies, exposed to nvrtc via CUDA_PATH below.
 RUN pip3 install --no-cache-dir --break-system-packages \
     "numpy==1.26.*" "pandas==2.2.*" pyarrow "cupy-cuda12x"
 

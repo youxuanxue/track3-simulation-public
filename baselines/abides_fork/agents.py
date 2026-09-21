@@ -9,7 +9,8 @@ spread, and places orders on the response. All randomness draws from
 
 The stock ABIDES agents are not used because their parameters do not match the
 scenario abstraction (e.g. the stock ``NoiseAgent`` wakes exactly once); these
-honor the scenario format defined in ``templates/sim_scenario.schema.json``.
+honor the scenario format documented in ``docs/AUTHORING-GUIDE.md`` and templated
+in ``templates/scenario.json``.
 """
 
 from __future__ import annotations

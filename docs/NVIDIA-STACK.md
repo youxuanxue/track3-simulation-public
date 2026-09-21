@@ -9,7 +9,7 @@ skill*, not a solution recipe.
 ## Framing: encouraged, not mandated
 
 Track 3 is already the **leveled** track — every submission runs on the same fixed SKU
-(`baselines/README.md` §5) with **no runtime LLM** (`network=none`). The "same tools so a bigger
+(`baselines/README.md` §3) with **no runtime LLM** (`network=none`). The "same tools so a bigger
 model can't win" argument that levels the LLM tracks does not apply here; there is no model in the
 loop. Mandating GPU usage would in fact *un*-level T3, because a well-engineered CPU submission is a
 first-class result. So the stack is **encouraged and documented, never required**, and no award is
@@ -21,7 +21,7 @@ gated on using it. What is rewarded is the outcome — throughput among admissib
 | Tool | Fit for T3 | How to use it | Caveat |
 |---|---|---|---|
 | **Nsight** (nsys) | **Strong** — this *is* the skill the awards reward | Profile your `simulate` run, name NVTX ranges to match SimProfile components, submit the profile → **Best Systems Diagnosis** | Profiler overhead must never touch the ranked run; profile on your own machine. `ncu` on the shared box is a perf-counter/isolation decision (default: no) |
-| **CUDA** | **Partial — one route** | Port hot kernels (matching, event processing) to GPU; vendor the CUDA runtime in your image (`network=none`) | DES is branch-heavy and largely sequential; a naive batched port breaks the exact-fill gates. Real speedups come from *semantics-preserving* parallelism (e.g. across independent scenarios), not from approximating the event order |
+| **CUDA** | **Partial — one route** | World-level batching only: keep each world's event order and matching on the CPU integer path, and use the GPU for pure-function bulk work (oracle pre-sampling, batched agent math) or for many independent worlds at once. Vendor the CUDA runtime in your image (`network=none`) | DES is branch-heavy and largely sequential; a naive batched port breaks the exact-fill gates, and a *single* order book on GPU is measured 2–3 orders of magnitude slower than CPU (JAX-LOB, arXiv:2308.13289). Real speedups come from *semantics-preserving* parallelism (e.g. across independent scenarios), not from approximating the event order |
 | **RAPIDS / cuDF** | **Dev-side only** | Trace/ledger forensics on gate rejections; organizer-side gate acceleration | **Not** the ranked hot loop — vectorizing the order book over a cuDF frame reorders events and fails Tier-A exactness. cuDF does not belong in the eval image |
 | **cuOpt** | **No fit** | — | There is no discrete-optimization surface anywhere in Track 3 — public or sealed (deterministic price-time matching, STP policies, DES loops). **Recommend dropping cuOpt from the T3 row** of the sponsor mapping |
 
@@ -31,14 +31,15 @@ gated on using it. What is rewarded is the outcome — throughput among admissib
   (Tier-B). The provided CPU ABIDES already does this; your job is to go faster without breaking it.
 - **To rank well:** raise `events/sec`. GPU (CUDA) is one route; so are constant-factor CPU
   optimizations and parallelizing across the independent scenarios of the batch family.
-- **To win a special award:** GPU efficiency (Best GPU Acceleration), the speed–realism frontier,
-  latency-semantics preservation, or systems diagnosis (Nsight → SimProfile). The two
-  telemetry-dependent awards use **host-measured** GPU time / peak memory, not your self-report —
-  see `throughput/README.md`.
+- **To win a special award:** Best GPU Acceleration (eligibility via host-measured
+  `gpu_utilization >= GPU_UTILIZATION_FLOOR`, then ranked on `speedup_vs_cpu_abides` — not on GPU
+  efficiency or utilization), the speed–realism frontier, latency-semantics preservation, or
+  systems diagnosis (Nsight → SimProfile). The telemetry-dependent awards use **host-measured**
+  GPU time / peak memory, not your self-report — see `throughput/README.md`.
 
 ## Where the tooling lives
 
-- Fixed-SKU box + pinned CUDA toolkit (the compile target): `baselines/README.md` §5.
+- Fixed-SKU box + pinned CUDA toolkit (the compile target): `baselines/README.md` §3.
 - Awards, diagnostics, and the host-telemetry integrity rules: `throughput/README.md`.
 - The nsys → SimProfile recipe (`docs/PROFILING.md`) and the optional CUDA/CuPy starter
   (`baselines/gpu_starter/`) are both in this repository now. Each is one route, not the expected

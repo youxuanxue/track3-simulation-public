@@ -86,7 +86,7 @@ _FAMILY_NUM: dict[str, int] = {
     "oracle-noise": 4,
     "calibration-stylized-facts": 5,
     "throughput-scale": 6,
-    "exchange-protocol": 7,  # MP / GPU-LOB-Core: Layer-2 exchange responses (g3.5). Tier-A via card.
+    "exchange-protocol": 7,  # MP: Layer-2 exchange responses (g3.5). Tier-A via card.
     "reactive-agent": 8,  # RA: endogenous reaction to a scheduled intervention. Tier-A (see TIER_A_FAMILIES) + mandatory ledger.
 }
 

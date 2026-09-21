@@ -1,4 +1,4 @@
-"""Author the 3 public-dev Track-3 units (card + scenario + reference trace + events).
+"""Author the public-dev Track-3 units, one per public scenario (card + scenario + reference trace + events).
 
 Each public scenario in ``regression_suite/scenarios/`` becomes a self-contained unit under
 ``units/`` — the participant-facing practice package AND the Dev-phase scoring input (the

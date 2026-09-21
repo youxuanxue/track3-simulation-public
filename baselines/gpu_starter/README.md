@@ -118,17 +118,19 @@ bit-identical output. There is no wheel-versus-Blackwell problem to design aroun
 For a full submission, fetch the ABIDES adapter exactly as `baselines/Dockerfile` does and
 implement the `simulate` verb on top.
 
-## `TODO(hub)` — needed to make this real on the eval box
+## Status on the eval box
 
-- Pin the CUDA base image + `cupy-cudaXXX` to the box's **CUDA toolkit / driver**, and target its
-  **GPU SKU + compute capability** (`baselines/README.md` §5 lists these once the hub confirms them).
-- Validate a gate-passing GPU port on the **actual box GPU** — a bit-exact GPU matching engine is a
-  research effort and can't be certified without the hardware. Until then this is a *scaffold + the
+- The box spec has landed: GPU SKU, compute capability, driver and host CUDA toolkit are published
+  in `baselines/README.md` §3, and this starter was verified on that hardware (B200, `sm_100`,
+  under gVisor — see the measurement table above). The `nvidia/cuda:12.8.0-runtime` base with
+  `cupy-cuda12x` is compatible with it — CUDA 12.x images work.
+- Still open: a gate-passing GPU port of any real hot path. Until then this is a *scaffold + the
   exactness discipline*, not a finished accelerated simulator.
 
 ## How the awards see a GPU submission
 
-- **Best GPU Acceleration** ranks on host-measured GPU efficiency — the harness measures your GPU
-  time (NVML), you don't self-report it (`throughput/README.md`).
+- **Best GPU Acceleration**: eligibility requires host-measured `gpu_utilization` reaching
+  `GPU_UTILIZATION_FLOOR`; the award then ranks on **`speedup_vs_cpu_abides`** — not on GPU
+  efficiency and not on utilization (`throughput/README.md` §6).
 - Pair it with an Nsight SimProfile for **Best Systems Diagnosis** (`docs/PROFILING.md`).
 - The NVIDIA-stack mapping for T3 is in `docs/NVIDIA-STACK.md`.

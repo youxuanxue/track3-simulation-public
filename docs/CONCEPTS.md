@@ -308,8 +308,8 @@ that looks completely unrealistic — for example, one with perfectly Gaussian r
 clustering of big moves. The stylized-fact check catches this.
 
 Before a submission is ranked by speed, it must pass all four gated stylized-fact checks
-(KS distance, ACF of |r_t|, Hill tail exponent, and depth-distribution JS — the first three
-are all computed by the local `regression_suite` pre-check, including the depth divergence). The intraday
+(KS distance, ACF of |r_t|, Hill tail exponent, and depth-distribution JS — all four
+are computed by the local `regression_suite` pre-check, including the depth divergence). The intraday
 U-shape below is described for context but is not gated by a ceiling:
 
 ### Fat tails (heavy tails)
@@ -393,8 +393,8 @@ predictable is the value `k` steps later?" Specifically, ACF(1) is the correlati
 
 For volatility clustering, we expect ACF(k) to be positive and slowly decaying — a big
 move today predicts slightly elevated volatility for the next several days. We measure the
-**L2 norm** (root-mean-square) of the difference between your ACF curve and the reference
-ACF curve over lags 1 through 20.
+**RMS difference** between your ACF curve and the reference
+ACF curve over lags **(1, 5, 10, 20, 50)**.
 
 ### Hill tail index
 

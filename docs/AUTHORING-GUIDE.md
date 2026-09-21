@@ -192,15 +192,16 @@ one scenario are not supported.
 ```json
 "latency_config": {
   "model": "log_normal",
-  "params": { "mu": 6.5, "sigma": 0.5 }
+  "params": { "mean_ns": 1000, "sigma": 0.5, "min_ns": 100, "max_ns": 10000000 }
 }
 ```
 
-- **`model`** options:
-  - `"constant"` — every agent has the same one-way latency: `{"latency_ns": 500000}`
-  - `"log_normal"` — latency drawn from log-normal per message: `{"mu": <float>, "sigma": <float>}`. Units: nanoseconds (so `mu=6.5` ≈ 665 ns median).
-  - `"empirical"` — reads a CDF table from a local file: `{"cdf_path": "latency_cdf.csv"}`. Path is relative to the scenario directory.
-  - `"pareto"` (sealed scenarios only) — heavy-tailed: `{"alpha": 1.5, "x_min_ns": 100000}`
+- **`model`** options — implemented by `ScenarioLatencyModel` in `baselines/abides_fork/config.py`.
+  All four appear in public scenarios (see the table in `docs/CATEGORIES.md` Family 3):
+  - `"deterministic"` — every message takes exactly `mean_ns` (the default when `model` is absent).
+  - `"log_normal"` — per-message log-normal draw: `lognormal(mu=ln(mean_ns), sigma)`, so the median is `mean_ns`. Most public scenarios use this.
+  - `"uniform"` — uniform draw between `min_ns` and `max_ns` (`mean_ns` is advisory for this model).
+  - `"pareto"` — heavy-tailed: `min_ns * (1 + Pareto(alpha))`, default `alpha=1.5`. Public examples: `t3-eq-pareto-heavytail`, `t3-eq001-pareto-latency-tail`, `t3-st05-latency-spike-pareto`.
 
 ### `oracle_config` — fundamental value process
 
@@ -347,7 +348,7 @@ No other tolerance is needed. One wrong fill in any field = failure.
 ```toml
 [scoring.params]
 timestamp_tolerance_ns = 1000
-kendall_tau_min = 0.999    # minimum rank correlation on event arrival sequence
+kendall_tau_floor = 0.999    # minimum rank correlation on event arrival sequence
 ```
 
 ### Family 2 (Tier B)
@@ -358,18 +359,19 @@ spread_bps_tolerance = 10.0                  # ±10 basis points on time-average
 stylized_fact_ceilings = { ks = 0.08 }       # return-distribution KS (log-returns)
 ```
 
-### Family 4 (Tier B, oracle RMSE)
+### Family 4 (Tier B — same params as Family 2)
 
 ```toml
 [scoring.params]
 stylized_fact_ceilings = { ks = 0.08 }
 spread_bps_tolerance = 10.0
-oracle_rmse_tolerance_pct = 20.0    # ±20% of reference RMSE
-oracle_rmse_reference = <float>     # RMSE from reference trace; compute manually
 ```
 
-To compute `oracle_rmse_reference`, extract the mid-price series from `reference/trace.parquet`
-and the oracle series from the simulation, then compute `sqrt(mean((mid - oracle)^2))`.
+Family 4 is graded by the same Tier-B check as Family 2 — there is no oracle-RMSE gate. The
+`oracle_rmse_tolerance_pct` / `oracle_rmse_reference` keys that older configs (and many shipped
+scenarios) still carry are inert: no scorer reads them, and the oracle series is not present in
+`trace.parquet`, so such a comparison cannot be computed from a submission's output at all. Do not
+add these keys to new scenarios; see `CATEGORIES.md` Family 4.
 
 ### Family 5 (Tier B, stylized-fact ceilings)
 

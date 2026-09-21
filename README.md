@@ -12,7 +12,7 @@ You receive the open-source **ABIDES** simulator as your starting point. ABIDES 
 but slow. Your job is to produce a faster version — submitted as a Docker image — that:
 1. Passes a correctness check over the 72 public units plus a sealed scenario set (the **semantic regression suite**)
 2. Passes a 4-metric realism check (the **stylized-fact admissibility gate**)
-3. Is then ranked by speed (`events_per_sec` on a sealed benchmark scenario)
+3. Is then ranked by speed (mean `events_per_sec` over the full evaluation roster)
 
 Only simulators that pass both gates receive a leaderboard rank. Speed without correctness
 scores zero.
@@ -211,14 +211,17 @@ An admissible submission at or below the recorded reference rate receives the in
 the mean rates over the evaluation roster; it is not a same-instance baseline measurement.
 See `baselines/README.md` §3. There is no minimum baseline speed to beat for admission.
 
-### Baseline 2 — vectorized reference (internal performance ceiling)
+### Baseline 2 — vectorized reference (internal orientation point, not a ceiling)
 
 An in-house NumPy-vectorized limit-order-book simulator developed by the QFBench team. It is
 **not open-sourced** and is not shipped in this repo; it serves as the admissibility
-cross-check reference and the upper performance reference point. The logical interface a fast
-submission must satisfy (the `simulate` CLI plus the output schema) is documented in
-`baselines/README.md` §2. You may implement any internal architecture — vectorized NumPy,
-Numba, Cython, Rust via PyO3, … — as long as that CLI and the output schema are preserved.
+cross-check reference and an internal orientation point for what the scenarios cost a
+well-optimized implementation. There is no normalized throughput score for it to be the ceiling
+of, and its figure has never been reproduced on the evaluation fleet — treat it as orientation
+only (`baselines/README.md` §2). The logical interface a fast submission must satisfy (the
+`simulate` CLI plus the output schema) is documented there. You may implement any internal
+architecture — Cython, Rust via PyO3, a compiled C extension, NumPy, Numba, … — as long as that
+CLI and the output schema are preserved.
 
 ---
 
@@ -507,14 +510,23 @@ python throughput/timer.py --image track3-abides-baseline:latest \
     --scenario regression_suite/scenarios/as06_throughput_fast.json
 ```
 
-Record this number. It is your improvement target.
+Record this number. It is your improvement target. The timer discards the first run as warm-up by
+default; since the ranked clock is the runner's host wall clock over the whole container window
+(startup included), also record the number that keeps it (`--no-discard-warmup`).
 
-**Step 6** — Implement your accelerated simulator. Common approaches:
-- Replace the Python limit-order-book core with a compiled extension (see
-  `baselines/README.md` §2 for the interface contract your `simulate` CLI must satisfy).
-- Vectorize agent stepping with NumPy.
-- Re-implement the matching engine in Rust or C++ and call it from Python via a C
-  extension module.
+**Step 6** — Implement your accelerated simulator. The route with evidence behind it:
+- Move the whole hot core — event queue, order book, matching, agent stepping — into one
+  compiled extension (Cython, Rust via PyO3, or a C/C++ extension; see `baselines/README.md` §2
+  for the interface contract your `simulate` CLI must satisfy). Keep the exact path
+  single-threaded, integer-domain and allocation-free — per-event crossings between Python and
+  a compiled matching engine alone cost more than they save, so the core goes down as a whole.
+- Skip the debunked routes: NumPy-vectorizing the order book (measured 3–5× slower on the
+  cancel/match paths), Numba on the Python object event loop, batching orders into time slices
+  (breaks Tier-A ordering), and single-world matching on GPU (measured 2–3 orders of magnitude
+  slower; GPU only pays off as world-level batching). The collected evidence lives in
+  `research/2026-09-21-speed-competition-landscape.md`, an in-repo Cython candidate in
+  `baselines/fast_sim/`, and suggested approaches in
+  `units/t3-EXAMPLE-vectorized-matching/README.md` §3.
 
 Whatever approach you take, re-run the regression suite and stylized-fact checker after
 each change. Do not let correctness slip.

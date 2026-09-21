@@ -25,10 +25,10 @@
       "path": "README.md",
       "role": "fixture",
       "license": "CC-BY-4.0",
-      "sha256": "6b004a6adbd69f177fbd74d60379cab884736a6ed560d678e17f5a7ffa9bced8",
+      "sha256": "61363410a047c58f7c42c378e8f6fd78815f5da29c5bf34769e9eba0cc63fd82",
       "split": "public-dev",
       "redistributable": true,
-      "bytes": 11013
+      "bytes": 13453
     }
   ],
   "notes": "ABIDES baseline fork pinned at https://github.com/jpmorganchase/abides-jpmc-public commit f9cbe51342b7dedd9587e4e069040d68a5c6477f (BSD-3-Clause). Submission interface: `simulate --config /input/scenario.json --out /output/trace.parquet`, network disabled, required outputs trace.parquet + events.json."

@@ -617,10 +617,12 @@ tuning to one unit.
 
 ### Common mistakes
 
-1. **Reporting `events_per_sec` that includes initialization time.** The clock starts when
-   the simulation processes the first nanosecond of simulated time. Initialization (loading
-   the scenario config, constructing agents, warming up data structures) does not count.
-   Including it lowers your reported throughput.
+1. **Reporting `events_per_sec` that includes initialization time.** The self-reported rate in
+   `events.json` covers the simulation loop, so including initialization lowers your reported
+   throughput. But that self-report is only a consistency-checked record — the ranked rate is the
+   runner's host wall clock over the whole container window, startup and initialization included,
+   so initialization cost is real leaderboard cost too. See "How throughput is measured" in
+   `../README.md`.
 
 2. **Not handling a full book correctly.** Some accelerated order books use fixed-size
    arrays indexed by price level. When the price level count exceeds the array size, they
@@ -630,7 +632,9 @@ tuning to one unit.
 3. **Using a dict for the order book in Python.** Python dicts are fast for random access
    but slow for the sorted insertion and deletion the matching engine requires. The
    reference ABIDES already uses a sorted data structure; you probably need something
-   lower-level (C extension, Rust, or vectorized NumPy arrays).
+   lower-level (a C/C++ extension, Rust via PyO3, or Cython). NumPy-vectorizing the book
+   itself is measured slower, not faster — branch-heavy, order-dependent order flow does
+   not vectorize.
 
 4. **Multi-threading without determinism.** Parallelizing agent stepping is a powerful
    optimization, but all sources of non-determinism must be eliminated. Using a thread-safe

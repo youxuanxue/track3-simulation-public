@@ -393,8 +393,8 @@ predictable is the value `k` steps later?" Specifically, ACF(1) is the correlati
 
 For volatility clustering, we expect ACF(k) to be positive and slowly decaying — a big
 move today predicts slightly elevated volatility for the next several days. We measure the
-**L2 norm** (root-mean-square) of the difference between your ACF curve and the reference
-ACF curve over lags 1 through 20.
+**RMS difference** between your ACF curve and the reference
+ACF curve over lags **(1, 5, 10, 20, 50)**.
 
 ### Hill tail index
 

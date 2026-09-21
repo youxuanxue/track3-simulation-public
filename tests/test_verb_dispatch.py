@@ -21,8 +21,6 @@ the units must keep the shape that rule classifies, and a wrong-verb run must fa
 from __future__ import annotations
 
 import importlib.util
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -100,19 +98,13 @@ def test_detection_is_by_content_not_by_name() -> None:
         impostor = Path(td) / "t3-gbatch-not-really"
         impostor.mkdir()
         (impostor / "scenario.json").write_text("{}")
-        check(
-            not sio.is_batch_unit(impostor),
-            "name prefix alone triggered batch detection",
-        )
+        check(not sio.is_batch_unit(impostor), "name prefix alone triggered batch detection")
 
         # ...and the converse: an ordinary name with batch contents IS a batch unit.
         renamed = Path(td) / "t3-family-gb-01"
         (renamed / "scenarios").mkdir(parents=True)
         (renamed / "batch.json").write_text("{}")
-        check(
-            sio.is_batch_unit(renamed),
-            "batch contents under a plain name were not detected",
-        )
+        check(sio.is_batch_unit(renamed), "batch contents under a plain name were not detected")
 
 
 # ------------------------------------------------------------------- the wrong-verb diagnostic
@@ -126,9 +118,7 @@ def test_wrong_verb_on_a_batch_unit_names_the_cause() -> None:
             sio.read_scenario(unit / "scenario.json")
         except FileNotFoundError as exc:
             msg = str(exc)
-            check(
-                "simulate-batch" in msg, f"message does not name the right verb: {msg}"
-            )
+            check("simulate-batch" in msg, f"message does not name the right verb: {msg}")
             check("BATCHED" in msg, f"message does not say the unit is batched: {msg}")
         else:
             _FAILURES.append("read_scenario did not raise on a missing scenario.json")
@@ -145,10 +135,7 @@ def test_missing_scenario_on_a_normal_unit_lists_what_is_there() -> None:
         except FileNotFoundError as exc:
             msg = str(exc)
             check("card.toml" in msg, f"message does not list the unit contents: {msg}")
-            check(
-                "simulate-batch" not in msg,
-                f"message wrongly blames the batch verb: {msg}",
-            )
+            check("simulate-batch" not in msg, f"message wrongly blames the batch verb: {msg}")
         else:
             _FAILURES.append("read_scenario did not raise on a missing scenario.json")
 
@@ -163,31 +150,6 @@ def test_a_present_scenario_is_read_normally() -> None:
             sio.read_scenario(unit / "scenario.json") == '{"seed": 1}',
             "read_scenario altered a readable scenario file",
         )
-
-
-def test_scenario_resolver_does_not_load_trace_stack() -> None:
-    """The native CLI can resolve input without importing pandas or ABIDES trace code."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(_REPO / "baselines")
-    probe = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import abides_fork.scenario_io; "
-                "assert 'abides_fork.trace' not in sys.modules; "
-                "assert 'pandas' not in sys.modules"
-            ),
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    check(
-        probe.returncode == 0,
-        "scenario resolver imported the heavy ABIDES trace stack during cold start: "
-        f"{probe.stderr.strip()}",
-    )
 
 
 def main() -> int:

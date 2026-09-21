@@ -331,7 +331,7 @@ jobs:
       - name: Full public regression and alternating online-baseline pairs
         if: github.event_name == 'workflow_dispatch' && inputs.validate_development
         env:
-          ONLINE_BASELINE: ghcr.io/youxuanxue/track3-simulation-public@sha256:212d72f1b4fd28287bde3ba9c24e20b3888fa186830f2ba2de0ed07b864feea0
+          ONLINE_BASELINE: ${{ inputs.baseline_image || 'ghcr.io/youxuanxue/track3-simulation-public@sha256:212d72f1b4fd28287bde3ba9c24e20b3888fa186830f2ba2de0ed07b864feea0' }}
         run: |
           docker pull "$ONLINE_BASELINE"
           python scripts/validate_development_candidate.py --candidate "$IMAGE" --baseline "$ONLINE_BASELINE" --out out/v3/validation --repeats 3
@@ -362,7 +362,7 @@ jobs:
       contents: read
     env:
       CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
-      ONLINE_BASELINE: ghcr.io/youxuanxue/track3-simulation-public@sha256:212d72f1b4fd28287bde3ba9c24e20b3888fa186830f2ba2de0ed07b864feea0
+      ONLINE_BASELINE: ${{ inputs.baseline_image || 'ghcr.io/youxuanxue/track3-simulation-public@sha256:212d72f1b4fd28287bde3ba9c24e20b3888fa186830f2ba2de0ed07b864feea0' }}
       REFERENCE_IMAGE: ghcr.io/youxuanxue/track3-simulation-public@sha256:2da37408571f7701960fe86ce5d4817cc266b328fcad06fec7b8b4aef4d031f5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

@@ -2,7 +2,7 @@
   "image": {
     "registry": "ghcr.io",
     "repository": "youxuanxue/track3-simulation-public",
-    "digest": "sha256:0e81b21be6cb194ab1231a45a278d5f7538d9abf1463f93b26dc5b36eebecb8e"
+    "digest": "sha256:468ec20b51d6dbb70809521368c057761959c56f0293a075084819b082f20b90"
   },
   "license": "MIT",
   "team_number": 23,

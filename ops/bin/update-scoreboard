@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Regenerate the SCOREBOARD table from paired A/B measurement evidence.
+
+Reads <run-dir>/group-*/<unit>/<arm>/measurement.json (the layout written by
+scripts/benchmark_candidates.py run), computes per-unit median events/sec per
+arm, and rewrites the marked sections of ops/SCOREBOARD.md. Numbers in that
+file must come from this tool, never from hand edits.
+
+Usage:
+  ops/bin/update-scoreboard --run-dir out/b2-qualify/b2-run-confirm \
+      --label "b2-run-confirm (2026-09-19, colima-t3-arm64)" \
+      [--file ops/SCOREBOARD.md]
+"""
+import argparse
+import collections
+import datetime
+import glob
+import json
+import math
+import pathlib
+import re
+import statistics
+import sys
+
+META_BEGIN = "<!-- scoreboard:meta:begin -->"
+META_END = "<!-- scoreboard:meta:end -->"
+TABLE_BEGIN = "<!-- scoreboard:table:begin -->"
+TABLE_END = "<!-- scoreboard:table:end -->"
+ROLLUP_BEGIN = "<!-- scoreboard:rollup:begin -->"
+ROLLUP_END = "<!-- scoreboard:rollup:end -->"
+
+
+def load_medians(run_dir: pathlib.Path):
+    recs = sorted(glob.glob(str(run_dir / "group-*" / "*" / "*" / "measurement.json")))
+    if not recs:
+        sys.exit(f"no measurement.json under {run_dir}/group-*/*/*/ — wrong run dir?")
+    by = collections.defaultdict(lambda: collections.defaultdict(list))
+    for p in recs:
+        parts = p.split("/")
+        unit, arm = parts[-3], parts[-2]
+        d = json.load(open(p))
+        eps = d.get("events_per_sec")
+        if isinstance(eps, (int, float)) and eps > 0:
+            by[unit][arm].append(float(eps))
+    return by
+
+
+def render(by):
+    rows = []
+    for unit, arms in by.items():
+        if not arms.get("A") or not arms.get("B"):
+            continue
+        ma, mb = statistics.median(arms["A"]), statistics.median(arms["B"])
+        rows.append((unit, ma, mb, mb / ma))
+    if not rows:
+        sys.exit("no unit has both arms — nothing to render")
+    total_b = sum(r[2] for r in rows)
+    rows.sort(key=lambda r: -r[2])
+    lines = [
+        "| # | 单元 | A 中位 eps | B 中位 eps | B/A | B 贡献占比 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for i, (u, a, b, r) in enumerate(rows, 1):
+        lines.append(f"| {i} | {u} | {a:,.0f} | {b:,.0f} | {r:.3f} | {100*b/total_b:.2f}% |")
+    groups = collections.defaultdict(lambda: [0, 0.0, 0.0])
+    for u, a, b, _r in rows:
+        grp = re.sub(r"\d+$", "", u.split("-")[1]) if u.startswith("t3-") else u
+        g = groups[grp]
+        g[0] += 1
+        g[1] += a
+        g[2] += b
+    roll = [
+        "| 前缀组 | 单元数 | A 合计 eps | B 合计 eps | B/A | B 贡献占比 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for grp, (n, sa, sb) in sorted(groups.items(), key=lambda kv: -kv[1][2]):
+        roll.append(f"| {grp} | {n} | {sa:,.0f} | {sb:,.0f} | {sb/sa:.3f} | {100*sb/total_b:.2f}% |")
+    geo = math.exp(sum(math.log(r[3]) for r in rows) / len(rows))
+    return rows, lines, roll, geo
+
+
+def replace_block(text, begin, end, body):
+    i, j = text.find(begin), text.find(end)
+    if i < 0 or j < 0 or j < i:
+        sys.exit(f"marker pair missing or out of order: {begin} / {end}")
+    return text[: i + len(begin)] + "\n" + body + "\n" + text[j:]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-dir", required=True, type=pathlib.Path)
+    ap.add_argument("--file", default="ops/SCOREBOARD.md", type=pathlib.Path)
+    ap.add_argument("--label", default="")
+    args = ap.parse_args()
+
+    by = load_medians(args.run_dir)
+    rows, table, rollup, geo = render(by)
+    mean_a = sum(r[1] for r in rows) / len(rows)
+    mean_b = sum(r[2] for r in rows) / len(rows)
+    meta = "\n".join([
+        f"- 数据源：`{args.run_dir}`" + (f" — {args.label}" if args.label else ""),
+        f"- 生成时刻：{datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')}",
+        f"- 单元数：{len(rows)}（双臂齐全）",
+        f"- 算术平均：A = {mean_a:,.0f} → B = {mean_b:,.0f} eps（{100*(mean_b/mean_a-1):+.1f}%）",
+        f"- 几何平均 B/A：{geo:.4f}",
+    ])
+    text = args.file.read_text()
+    text = replace_block(text, META_BEGIN, META_END, meta)
+    text = replace_block(text, TABLE_BEGIN, TABLE_END, "\n".join(table))
+    text = replace_block(text, ROLLUP_BEGIN, ROLLUP_END, "\n".join(rollup))
+    args.file.write_text(text)
+    print(f"updated {args.file}: {len(rows)} units, mean A={mean_a:,.0f} B={mean_b:,.0f}, geomean B/A={geo:.4f}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# new-experiment — 发放下一个 EXP 编号并从模板建档（PROTOCOL §3 / experiments/README）
+# 用法: ops/bin/new-experiment "假设一句话" [slug]
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DIR="$ROOT/ops/experiments"
+TPL="$DIR/EXP-0000-template.md"
+
+hyp="${1:?usage: new-experiment \"hypothesis\" [slug]}"
+slug="${2:-$(echo "$hyp" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-40)}"
+[ -n "$slug" ] || { echo "could not derive slug — pass one explicitly" >&2; exit 2; }
+
+max=0
+shopt -s nullglob
+for f in "$DIR"/EXP-[0-9]*.md; do
+  base="$(basename "$f")"
+  n="${base#EXP-}"; n="${n%%-*}"
+  [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ] && max="$n"
+done
+next=$((max + 1))
+id="$(printf 'EXP-%04d' "$next")"
+out="$DIR/$id-$slug.md"
+[ -e "$out" ] && { echo "exists: $out" >&2; exit 1; }
+
+today="$(date +%F)"
+sed -e "s/EXP-NNNN/$id/g" -e "s/<YYYY-MM-DD>/$today/" "$TPL" > "$out"
+# 标题行填入假设（模板首行：# EXP-XXXX — <一句话假设>）
+perl -pi -e "s{^# $id — .*\$}{# $id — $hyp}" "$out"
+
+echo "created: $out"
+echo "next: 填写改动范围/验收线/测量协议，并在 experiments/README.md『当前在役』登记 $id"

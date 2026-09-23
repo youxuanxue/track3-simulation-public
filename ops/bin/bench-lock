@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# bench-lock — 全队单例测量互斥锁（PROTOCOL §5.2）
+# 一切产生 events/sec 数字的命令必须持锁执行：
+#   ops/bin/bench-lock exec my-name 600 -- python scripts/benchmark_candidates.py run ...
+# 锁目录默认 <repo>/out/bench.lock（跨 worktree 共享；用 BENCH_LOCK_DIR 覆盖）。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LOCK="${BENCH_LOCK_DIR:-$ROOT/out/bench.lock}"
+STALE_SECONDS="${BENCH_LOCK_STALE:-21600}"   # 6h 无活人持锁视为死锁
+INFO="$LOCK/info"
+
+_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+
+_now() { date +%s; }
+
+_read_info() { [ -f "$INFO" ] && cat "$INFO" || echo "(no info)"; }
+
+_is_stale() {
+  [ -d "$LOCK" ] || return 1
+  local pid ts now age
+  pid="$(sed -n 's/^pid=//p' "$INFO" 2>/dev/null || true)"
+  ts="$(_mtime "$LOCK" 2>/dev/null || echo 0)"
+  now="$(_now)"; age=$(( now - ts ))
+  if [ "$age" -gt "$STALE_SECONDS" ]; then
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+acquire() {
+  local owner="${1:?owner required}" wait="${2:-0}" t0
+  t0="$(_now)"
+  while true; do
+    if _is_stale; then
+      echo "bench-lock: breaking stale lock: $(_read_info)" >&2
+      rm -rf "$LOCK"
+    fi
+    if mkdir "$LOCK" 2>/dev/null; then
+      {
+        echo "pid=$$"
+        echo "owner=$owner"
+        echo "host=$(hostname)"
+        echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "pwd=$PWD"
+      } > "$INFO"
+      echo "bench-lock: acquired by $owner (pid $$)"
+      return 0
+    fi
+    if [ "$(( $(_now) - t0 ))" -ge "$wait" ]; then
+      echo "bench-lock: BUSY — held by: $(_read_info)" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+release() {
+  if [ ! -d "$LOCK" ]; then
+    echo "bench-lock: not held" >&2
+    return 1
+  fi
+  echo "bench-lock: released (was: $(_read_info | tr '\n' ' '))"
+  rm -rf "$LOCK"
+}
+
+status() {
+  if [ -d "$LOCK" ]; then
+    echo "HELD"; _read_info
+    if _is_stale; then echo "(stale — acquire will break it)"; fi
+  else
+    echo "FREE"
+  fi
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  acquire) acquire "$@" ;;
+  release) release ;;
+  status)  status ;;
+  exec)
+    owner="${1:?owner required}"; shift
+    wait=0
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then wait="$1"; shift; fi
+    [ "${1:-}" = "--" ] || { echo "usage: bench-lock exec <owner> [wait_sec] -- <cmd...>" >&2; exit 2; }
+    shift
+    acquire "$owner" "$wait"
+    trap 'rm -rf "$LOCK"' EXIT
+    "$@"
+    ;;
+  *) echo "usage: bench-lock {acquire <owner> [wait_sec]|release|status|exec <owner> [wait_sec] -- <cmd...>}" >&2; exit 2 ;;
+esac

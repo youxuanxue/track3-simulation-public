@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Noise calibration for paired A/B confirmation runs (PROTOCOL §4 门2).
+
+Reads <run-dir>/group-*/<unit>/<arm>/measurement.json and reports:
+  - per-unit paired log(B/A) scatter across groups (the regression-gate noise floor)
+  - the aggregate arithmetic-mean ratio noise band (the promotion-gate noise floor)
+  - suggested 门2 thresholds per PROTOCOL §4
+
+Usage: ops/bin/noise-report --run-dir out/<confirmation-run> [--worst N]
+"""
+import argparse
+import collections
+import glob
+import json
+import math
+import statistics
+import sys
+
+
+def pct(sorted_vals, q):
+    return sorted_vals[min(len(sorted_vals) - 1, int(q * len(sorted_vals)))]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-dir", required=True)
+    ap.add_argument("--worst", type=int, default=12)
+    args = ap.parse_args()
+
+    recs = sorted(glob.glob(f"{args.run_dir}/group-*/*/*/measurement.json"))
+    if not recs:
+        sys.exit(f"no measurement.json under {args.run_dir}/group-*/*/*/")
+    paired = collections.defaultdict(dict)
+    for p in recs:
+        parts = p.split("/")
+        grp, unit, arm = parts[-4], parts[-3], parts[-2]
+        paired.setdefault(unit, {}).setdefault(grp, {})[arm] = json.load(open(p))["events_per_sec"]
+
+    per_unit, gmeans = {}, collections.defaultdict(lambda: collections.defaultdict(float))
+    for u, groups in paired.items():
+        ratios = [math.log(g["B"] / g["A"]) for g in groups.values() if "A" in g and "B" in g]
+        if len(ratios) >= 4:
+            per_unit[u] = (statistics.stdev(ratios), statistics.mean(ratios), len(ratios))
+        for g, arms in groups.items():
+            if "A" in arms and "B" in arms:
+                gmeans[g]["A"] += arms["A"]
+                gmeans[g]["B"] += arms["B"]
+
+    if not per_unit:
+        sys.exit("no unit has >=4 paired groups")
+    sds = sorted(v[0] for v in per_unit.values())
+    n_groups = len(gmeans)
+    med_ratio = statistics.median([math.log(v["B"] / v["A"]) for v in gmeans.values()])
+    agg_sd = statistics.stdev([math.log(v["B"] / v["A"]) for v in gmeans.values()])
+    agg_band = 2 * 1.2533 * agg_sd / math.sqrt(n_groups)
+
+    print(f"# 噪声校准报告 — {args.run_dir}")
+    print(f"单元 {len(per_unit)}，配对组 {n_groups}")
+    print(f"\n## 聚合层（晋级判据）")
+    print(f"全场算术平均 log(B/A) 中位 = {med_ratio*100:+.2f}%")
+    print(f"组间 sd = {agg_sd*100:.3f}%；中位比 95% 噪声带 ≈ ±{agg_band*100:.2f}%")
+    print(f"→ 晋级阈值建议 ≥ {max(2.0, 2.5*agg_band*100):.1f}%（取 2% 与 2.5×噪声带 的较大者）")
+    print(f"\n## 单元层（回归判据）")
+    print(f"配对 log(B/A) 组间 sd 分布: median={pct(sds,.5)*100:.1f}%  p75={pct(sds,.75)*100:.1f}%  "
+          f"p90={pct(sds,.9)*100:.1f}%  max={sds[-1]*100:.1f}%")
+    band = lambda s: 2 * 1.2533 * s / math.sqrt(5)
+    print(f"单单元中位比 95% 带: median ±{band(pct(sds,.5))*100:.1f}%  p90 ±{band(pct(sds,.9))*100:.1f}%")
+    print(f"→ 回归确认线建议 = 1 − max(15%, 单元自带 95% 带)；0.85–1.0 可疑区加测 5 组")
+    print(f"\n## 噪声最大 {min(args.worst, len(per_unit))} 单元（单元级结论需更多组数）")
+    print("| 单元 | 配对 sd | 95% 带 | 实测 log(B/A) |")
+    print("|---|---|---|---|")
+    for u, (s, m, n) in sorted(per_unit.items(), key=lambda kv: -kv[1][0])[: args.worst]:
+        flag = " ⚠️>50%" if s > 0.5 else ""
+        print(f"| {u} | {s*100:.1f}% | ±{band(s)*100:.1f}%{flag} | {m*100:+.1f}% |")
+
+
+if __name__ == "__main__":
+    main()

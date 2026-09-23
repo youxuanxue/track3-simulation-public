@@ -120,7 +120,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
     batch_events = simulate_batch(args.batch_dir, args.out_dir)
     print(json.dumps(batch_events))
-    return 0
+    # batch_events.json is written and all worker processes have exited (the
+    # pool context manager has shut down). Skip interpreter teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+    return 0  # unreachable; keeps the annotated return type honest
 
 
 if __name__ == "__main__":

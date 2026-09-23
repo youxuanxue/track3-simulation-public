@@ -10,9 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
-from abides_fork.trace import _MSG_DTYPES, _TRACE_DTYPES
 from fast_sim.ordering import stable_lexsort
 
 
@@ -79,6 +77,9 @@ class ColumnTrace:
         self.qsz.append(size)
 
     def to_dataframe(self) -> pd.DataFrame:
+        import pandas as pd
+        from abides_fork.trace import _TRACE_DTYPES
+
         from fast_sim.extract import (
             _ORDER_EVENT_MAP,
             _empty_trace,
@@ -251,6 +252,9 @@ class ColumnLedger:
         self.seq[idx] = seq
 
     def to_dataframe(self) -> pd.DataFrame:
+        import pandas as pd
+        from abides_fork.trace import _MSG_DTYPES
+
         from fast_sim.extract import _empty_msg, _nullable_int64
 
         n = len(self.seq)

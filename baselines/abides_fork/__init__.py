@@ -15,4 +15,13 @@ from __future__ import annotations
 
 __all__ = ["extract_trace", "TRACE_COLUMNS"]
 
-from abides_fork.trace import TRACE_COLUMNS, extract_trace
+
+def __getattr__(name: str):
+    # PEP 562: ``abides_fork.trace`` pulls in pandas + abides_core (~0.3s), and
+    # the light-boot path (``fast_sim.simulate``) only needs ``scenario_io``.
+    # Defer the trace import until the attributes are actually touched.
+    if name in __all__:
+        from abides_fork.trace import TRACE_COLUMNS, extract_trace
+
+        return {"TRACE_COLUMNS": TRACE_COLUMNS, "extract_trace": extract_trace}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

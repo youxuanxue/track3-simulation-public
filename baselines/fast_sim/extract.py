@@ -15,14 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
-from abides_fork.trace import (
-    MESSAGE_TRACE_COLUMNS,
-    TRACE_COLUMNS,
-    _MSG_DTYPES,
-    _TRACE_DTYPES,
-)
 from fast_sim.ordering import stable_lexsort
 
 _ORDER_EVENT_MAP: dict[str, str] = {
@@ -37,6 +30,11 @@ _EMPTY_MSG = None
 
 
 def _empty_trace() -> pd.DataFrame:
+    # pandas + abides_fork.trace stay function-level so importing this module
+    # never drags them onto the native light-boot path.
+    import pandas as pd
+    from abides_fork.trace import TRACE_COLUMNS, _TRACE_DTYPES
+
     global _EMPTY_TRACE
     if _EMPTY_TRACE is None:
         _EMPTY_TRACE = pd.DataFrame(columns=TRACE_COLUMNS).astype(_TRACE_DTYPES)
@@ -44,6 +42,9 @@ def _empty_trace() -> pd.DataFrame:
 
 
 def _empty_msg() -> pd.DataFrame:
+    import pandas as pd
+    from abides_fork.trace import MESSAGE_TRACE_COLUMNS, _MSG_DTYPES
+
     global _EMPTY_MSG
     if _EMPTY_MSG is None:
         _EMPTY_MSG = pd.DataFrame({c: [] for c in MESSAGE_TRACE_COLUMNS}).astype(
@@ -77,6 +78,9 @@ def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:
       quote: ``(t, "BEST_BID"|"BEST_ASK", price, size)``
     Legacy 3-tuples ``(t, event_type, dict|str)`` are still accepted.
     """
+    import pandas as pd
+    from abides_fork.trace import _TRACE_DTYPES
+
     t_ns: list[int] = []
     agent_ids: list[int] = []
     event_types: list[str] = []
@@ -273,6 +277,8 @@ def extract_trace_from_agents(agents: list[Any]) -> pd.DataFrame:
 
 
 def _nullable_int64(values: np.ndarray, mask: np.ndarray) -> pd.Series:
+    import pandas as pd
+
     s = pd.array(values, dtype="Int64")
     if mask.any():
         s[mask] = pd.NA
@@ -280,6 +286,9 @@ def _nullable_int64(values: np.ndarray, mask: np.ndarray) -> pd.Series:
 
 
 def _message_df_from_rows(rows: list, *, seqs: list[int] | None = None) -> pd.DataFrame:
+    import pandas as pd
+    from abides_fork.trace import _MSG_DTYPES
+
     n = len(rows)
     seq = np.empty(n, dtype=np.int64)
     t_recv = np.empty(n, dtype=np.int64)

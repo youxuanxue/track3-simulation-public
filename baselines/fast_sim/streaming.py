@@ -9,6 +9,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from fast_sim.pandas_meta import LEDGER_SCHEMA_METADATA
+
 # Advise the kernel to drop clean file pages after this many row-group writes.
 # Large throughput traces (tens of GiB) otherwise pin page cache inside the
 # container cgroup and inflate host_peak_memory far above process RSS.
@@ -56,21 +58,15 @@ class ParquetSink:
     """Write independent row groups; never collect all simulation rows in RAM."""
 
     def __init__(self, path: Path, empty: pa.Table):
-        from fast_sim.native import as_pandas
-
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.num_rows = 0
         self._writes = 0
         # The shared reader uses pandas metadata to restore nullable int64. Attach
-        # the empty frame's metadata without converting every full chunk to pandas.
+        # the byte-exact hand-built pandas metadata (see fast_sim.pandas_meta)
+        # without paying a pandas import in every simulate process.
         if "t_send_ns" in empty.column_names:
-            metadata = pa.Table.from_pandas(
-                as_pandas(empty), preserve_index=False
-            ).schema.metadata
-            # Pandas versions can export StringDtype as large_string. Preserve
-            # the input Arrow fields; only the nullable restoration metadata is needed.
-            empty = empty.replace_schema_metadata(metadata)
+            empty = empty.replace_schema_metadata(LEDGER_SCHEMA_METADATA)
         self.schema = empty.schema
         strings = [f.name for f in self.schema if pa.types.is_string(f.type)]
         # Small-cardinality integer columns (agent ids, order sizes) compress far

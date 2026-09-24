@@ -57,6 +57,39 @@ def _mp_context():
     return mp.get_context("spawn")
 
 
+def _prewarm_arrow_for_fork() -> None:
+    """Pay the one-time pyarrow / Arrow C++ init in the parent, before forking.
+
+    Light boot (EXP-0007) deliberately leaves pyarrow unimported at module
+    import; under ``fork`` each pool worker then re-pays ~0.2s of pyarrow
+    import + Arrow runtime init on its first task (measured: run_one 47ms
+    warm vs ~313ms cold on gbatch-homog-4). The pre-light-boot code paid it
+    once at parent boot and fork inherited the warm state; this restores that
+    symmetry for the batch path only — the single-scenario ``simulate`` CLI
+    is untouched. The parquet round-trip goes to a throwaway tmp file; if the
+    sandbox makes even /tmp unwritable the write is skipped (workers would
+    simply pay their own cold start, as before — never a correctness issue).
+    """
+    import tempfile
+
+    import pyarrow.parquet  # noqa: F401
+    from fast_sim._native import CLedger, CTrace
+    from fast_sim.streaming import ParquetSink
+
+    ledger0 = CLedger().to_arrow()
+    CTrace().to_arrow()
+    try:
+        tmp = pathlib.Path(tempfile.mkdtemp()) / "warm.parquet"
+        sink = ParquetSink(tmp, ledger0)
+        try:
+            sink.write(ledger0)
+        finally:
+            sink.close()
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def simulate_batch(
     batch_dir: str | pathlib.Path, out_dir: str | pathlib.Path
 ) -> dict[str, Any]:
@@ -69,6 +102,8 @@ def simulate_batch(
     jobs = [(str(p), str(out_dir / p.stem / "trace.parquet")) for p in subs]
     workers = _worker_count(len(jobs))
 
+    # Fork-inheritable Arrow warm-up, paid once here instead of once per worker.
+    _prewarm_arrow_for_fork()
     t0 = time.perf_counter()
     results: list[dict[str, Any]] = []
     if workers == 1 or len(jobs) == 1:
